@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bStocks Live Leaderboard</title>
+<style>
+  :root { --bg:#f6f7fb; --card:#fff; --text:#1d1d22; --muted:#6e6e78; --line:#e7e8ef; --brand:#0500ff; --up:#0a9b3a; --down:#d33; --warn:#b26b00; --chip:#eef0ff; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f1015; --card:#181a22; --text:#ececf1; --muted:#9a9cab; --line:#2a2d3a; --brand:#7c7cff; --up:#3ccf6c; --down:#ff6b6b; --warn:#f0b04a; --chip:#23264a; } }
+  * { box-sizing:border-box }
+  [hidden] { display:none !important }
+  body { margin:0; font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--text) }
+  .wrap { max-width:1100px; margin:0 auto; padding:20px 16px 60px }
+  header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; margin-bottom:16px }
+  h1 { font-size:20px; margin:0 }
+  .sub { color:var(--muted); font-size:13px }
+  button { font:inherit; font-weight:600; border:0; border-radius:999px; padding:10px 20px; background:var(--brand); color:#fff; cursor:pointer }
+  button:disabled { opacity:.55; cursor:wait }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px 16px; margin-bottom:14px }
+  .meta { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px }
+  .meta div b { display:block; font-size:12px; color:var(--muted); font-weight:500 }
+  .bar { height:6px; background:var(--line); border-radius:9px; overflow:hidden; margin-top:8px }
+  .bar i { display:block; height:100%; width:0; background:var(--brand); transition:width .3s }
+  .tools { display:flex; flex-wrap:wrap; gap:8px; align-items:center }
+  input { font:inherit; padding:9px 12px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--text); min-width:0; flex:1 }
+  .tbl { overflow-x:auto }
+  table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums }
+  th, td { padding:9px 8px; border-bottom:1px solid var(--line); text-align:right; white-space:nowrap }
+  th { font-size:12px; color:var(--muted); font-weight:600; position:sticky; top:0; background:var(--card); cursor:pointer }
+  th:nth-child(2), td:nth-child(2) { text-align:left }
+  tr.q td:first-child { box-shadow: inset 3px 0 0 var(--up) }
+  .addr { font-family:ui-monospace,Consolas,monospace; color:var(--text); text-decoration:none }
+  .addr:hover { text-decoration:underline }
+  .chip { display:inline-block; font-size:11px; padding:1px 7px; border-radius:99px; background:var(--chip); color:var(--brand); margin-left:6px }
+  .up { color:var(--up) } .down { color:var(--down) } .muted { color:var(--muted) } .warn { color:var(--warn) }
+  .need { display:block; font-size:11px; color:var(--muted) }
+  .err { color:var(--down); white-space:pre-wrap }
+  details { color:var(--muted); font-size:13px }
+  @media (max-width:640px) { .hide-sm { display:none } }
+  .me { border:2px solid var(--brand); background:linear-gradient(135deg, var(--chip), var(--card) 60%); padding:18px }
+  .me-top { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:baseline; justify-content:space-between }
+  .me-title { font-weight:700; font-size:15px }
+  .me-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px; margin-top:14px }
+  .me-grid b { display:block; font-size:12px; color:var(--muted); font-weight:500 }
+  .big { font-size:30px; font-weight:800; line-height:1.1; font-variant-numeric:tabular-nums }
+  .mid { font-size:20px; font-weight:700; font-variant-numeric:tabular-nums }
+  .me-notes { margin-top:14px; display:flex; flex-direction:column; gap:4px; font-size:13px }
+  .me-hist { margin-top:12px; font-size:13px }
+  .me-hist table td, .me-hist table th { padding:5px 6px }
+  tr.mine td { background:var(--chip) }
+  tr.mine td:first-child { box-shadow: inset 4px 0 0 var(--brand) }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>bStocks Live Leaderboard</h1>
+      <div class="sub">Tự tính lại từ on-chain BSC cho các ví trên bảng chính thức của Trust Wallet</div>
+    </div>
+    <button id="fetchBtn">Fetch dữ liệu mới nhất</button>
+  </header>
+
+  <div class="card me" id="me">
+    <div class="me-top">
+      <div class="me-title">Ví của bạn <span class="addr" id="meAddr"></span> <a href="#" id="meEdit" class="sub" hidden>đổi ví</a></div>
+      <a href="#" id="meJump" class="sub">Xem trong bảng ↓</a>
+    </div>
+    <div class="tools" id="meForm" style="margin-top:10px" hidden>
+      <input id="meInput" placeholder="Nhập địa chỉ ví của bạn (0x...) — chỉ lưu trên trình duyệt này">
+      <button id="meSave" style="padding:9px 16px">Lưu & Fetch</button>
+    </div>
+    <div class="muted" id="meEmpty" style="margin-top:8px">Bấm “Fetch” để xem hạng của bạn.</div>
+    <div id="meBody" hidden>
+      <div class="me-grid">
+        <div><b>Hạng hiện tại (live)</b><span class="big" id="meRank">—</span> <span id="meMove"></span></div>
+        <div><b>Điểm</b><span class="big" id="mePts">—</span></div>
+        <div><b>Volume</b><span class="mid" id="meVol">—</span></div>
+        <div><b>Thưởng nếu giữ hạng</b><span class="mid" id="meReward">—</span></div>
+      </div>
+      <div style="margin-top:14px"><b class="sub" id="meQualTxt"></b><div class="bar"><i id="meQualBar"></i></div></div>
+      <div class="me-notes" id="meNotes"></div>
+      <details class="me-hist"><summary id="meHistSum">Swap đã được tính</summary><div class="tbl" id="meHist"></div></details>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="meta">
+      <div><b>Dữ liệu on-chain tới</b><span id="mHead">—</span></div>
+      <div><b>Bảng chính thức cập nhật</b><span id="mOfficial">—</span></div>
+      <div><b>Số ví theo dõi</b><span id="mCount">—</span></div>
+      <div><b>Kết thúc chiến dịch</b><span id="mEnd">—</span></div>
+    </div>
+    <div id="status" class="sub" style="margin-top:10px">Bấm “Fetch” để lấy dữ liệu.</div>
+    <div class="bar"><i id="bar"></i></div>
+  </div>
+
+  <div class="card tools">
+    <input id="search" placeholder="Tìm ví (0x...)">
+  </div>
+
+  <div class="card tbl">
+    <table>
+      <thead><tr>
+        <th data-k="rank">#</th><th data-k="address">Ví</th><th data-k="points">Điểm (live)</th>
+        <th data-k="volume">Volume (live)</th><th data-k="delta" class="hide-sm">Δ điểm so với bảng TW</th>
+        <th data-k="orank" class="hide-sm">Hạng TW</th><th data-k="swaps" class="hide-sm">Swap</th><th data-k="lastTs" class="hide-sm">Swap gần nhất</th>
+      </tr></thead>
+      <tbody id="rows"><tr><td colspan="8" class="muted" style="text-align:center">Chưa có dữ liệu</td></tr></tbody>
+    </table>
+  </div>
+
+  <details class="card">
+    <summary>Cách tính</summary>
+    <p>Điểm = volume USD × hệ số (1.5× cho ANTB, NVDAB; 1× cho bStock khác). Chỉ tính các giao dịch chuyển 21 bStock hợp lệ ra/vào ví từ 20/11/2026 02:00 UTC, đi qua router swap của Trust Wallet hoặc ví smart account (EntryPoint 4337); bỏ swap bStock→bStock và giao dịch dưới $10. Cần ≥ $10,000 volume để đủ điều kiện nhận thưởng (viền xanh).</p>
+    <p>Giá USD lấy theo giá hiện tại trên DexScreener, nên volume có thể lệch khoảng 1–3% so với số của Trust Wallet. Bảng chính thức có thể còn loại thêm giao dịch bị coi là wash trading, nên đây chỉ là ước tính.</p>
+    <p id="prices"></p>
+  </details>
+</div>
+<script type="module">
+import { refresh } from './engine.js';
+const $ = s => document.querySelector(s);
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} },
+};
+let myWallet = (store.get('bstocks-my-wallet') || '').toLowerCase();
+const fmt = n => Math.round(n).toLocaleString('en-US');
+const usd = n => '$' + fmt(n);
+const short = a => a.slice(0, 6) + '…' + a.slice(-4);
+const when = iso => iso ? new Date(iso).toLocaleString('vi-VN') : '—';
+let data = null, sortKey = 'rank', sortDir = 1;
+
+const TIERS = [[1,10000],[2,6000],[3,4000],[10,1500],[20,750],[50,400],[100,250],[200,215],[300,160]];
+const rewardFor = rank => (TIERS.find(([max]) => rank <= max) || [0, 0])[1];
+
+function renderMe() {
+  $('#meAddr').textContent = myWallet ? short(myWallet) : '';
+  $('#meAddr').title = myWallet;
+  $('#meEdit').hidden = !myWallet;
+  $('#meForm').hidden = !!myWallet;
+  $('#meJump').hidden = !myWallet;
+  const me = myWallet && data?.rows?.find(r => r.address.toLowerCase() === myWallet);
+  if (!me) {
+    $('#meBody').hidden = true; $('#meEmpty').hidden = false;
+    $('#meEmpty').textContent = myWallet ? 'Bấm “Fetch” để xem hạng của ví này.' : 'Nhập ví của bạn để xem hạng, điểm và khoảng cách tới các mốc thưởng.';
+    return;
+  }
+  $('#meEmpty').hidden = true; $('#meBody').hidden = false;
+  const rows = data.rows, n = rows.length;
+  $('#meRank').textContent = me.points > 0 ? `#${me.rank}` : '—';
+  $('#meMove').innerHTML = me.official ? `<span class="sub">bảng TW: #${me.official.rank}</span>` : '<span class="sub">chưa có trên bảng TW</span>';
+  $('#mePts').textContent = fmt(me.points);
+  $('#meVol').textContent = usd(me.volume);
+  const reward = rewardFor(me.rank);
+  $('#meReward').innerHTML = me.points <= 0 ? '<span class="muted">—</span>'
+    : me.qualified ? `${fmt(reward)} USDC` : `<span class="warn">0</span> <span class="sub">(chưa đủ $10k; hạng này = ${fmt(reward)} USDC)</span>`;
+  const pct = Math.min(100, me.volume / 100);
+  $('#meQualTxt').innerHTML = me.qualified ? '<span class="up">✓ Đã đủ điều kiện ($10,000 volume)</span>'
+    : `Điều kiện nhận thưởng: ${usd(me.volume)} / $10,000 — còn thiếu <b class="warn">${usd(10000 - me.volume)}</b>`;
+  $('#meQualBar').style.width = pct + '%';
+  $('#meQualBar').style.background = me.qualified ? 'var(--up)' : 'var(--brand)';
+  const notes = [];
+  const above = rows[me.rank - 2], below = rows[me.rank];
+  if (me.points <= 0) notes.push('Chưa có swap hợp lệ nào kể từ khi chiến dịch bắt đầu (20/11 02:00 UTC).');
+  if (above && me.points > 0) notes.push(`Cần thêm <b>${fmt(above.points - me.points + 1)}</b> điểm (≈ ${usd((above.points - me.points + 1) / 1.5)} volume ANTB/NVDAB hoặc ${usd(above.points - me.points + 1)} bStock khác) để vượt #${above.rank} ${short(above.address)}.`);
+  if (below && me.points > 0) notes.push(`Đang hơn #${below.rank} ${short(below.address)} <b>${fmt(me.points - below.points)}</b> điểm.`);
+  if (me.points > 0 && me.rank > 1) {
+    const nextTier = TIERS.filter(([max]) => max < me.rank).pop();
+    if (nextTier) { const t = rows[nextTier[0] - 1]; if (t) notes.push(`Lên mốc thưởng ${fmt(nextTier[1])} USDC (top ${nextTier[0]}): cần thêm <b>${fmt(t.points - me.points + 1)}</b> điểm.`); }
+  }
+  if (n < 300) notes.push(`<span class="muted">Hiện mới có ${n} ví trên bảng (thưởng cho top 300), nên ví nào đủ $10k volume đều đang trong vùng nhận thưởng.</span>`);
+  if (me.excluded) notes.push(`<span class="muted">${me.excluded} giao dịch không được tính (swap qua app/router khác, bStock→bStock hoặc dưới $10).</span>`);
+  $('#meNotes').innerHTML = notes.map(x => `<div>• ${x}</div>`).join('');
+  const h = me.history || [];
+  $('#meHistSum').textContent = `Swap đã được tính (${h.length})`;
+  $('#meHist').innerHTML = h.length ? `<table><thead><tr><th>Thời gian</th><th>Loại</th><th>Token</th><th>USD</th><th>Tx</th></tr></thead><tbody>${
+    h.map(x => `<tr><td>${new Date(x.ts * 1000).toLocaleString('vi-VN')}</td><td style="text-align:left">${x.side}</td><td>${x.token}</td><td>${usd(x.usd)}</td><td><a class="addr" target="_blank" rel="noopener" href="https://bscscan.com/tx/${x.tx}">${x.tx.slice(0, 10)}…</a></td></tr>`).join('')
+  }</tbody></table>` : '<div class="muted">Chưa có.</div>';
+}
+
+$('#meJump').onclick = e => { e.preventDefault(); $('#search').value = ''; render(); document.querySelector('tr.mine')?.scrollIntoView({ behavior: 'smooth', block: 'center' }); };
+
+function render() {
+  if (!data?.rows) return;
+  renderMe();
+  $('#mHead').textContent = `${when(data.headTime)} (block ${data.headBlock.toLocaleString()})`;
+  $('#mOfficial').textContent = when(data.officialUpdatedAt);
+  $('#mCount').textContent = data.rows.length;
+  $('#mEnd').textContent = when(data.endsAt);
+  $('#prices').textContent = 'Giá dùng để tính: ' + Object.entries(data.prices).map(([s, p]) => `${s} $${p}`).join(' · ');
+  const q = $('#search').value.trim().toLowerCase();
+  let rows = data.rows.map(r => ({ ...r, delta: r.official ? r.points - r.official.points : r.points, orank: r.official?.rank ?? 9999 }));
+  if (q) rows = rows.filter(r => r.address.toLowerCase().includes(q));
+  rows.sort((a, b) => { const x = a[sortKey], y = b[sortKey]; return (typeof x === 'string' ? x.localeCompare(y) : x - y) * sortDir; });
+  $('#rows').innerHTML = rows.map(r => {
+    const move = r.official ? r.official.rank - r.rank : null;
+    const moveTxt = move == null ? '<span class="chip">mới</span>' : move > 0 ? `<span class="up"> ▲${move}</span>` : move < 0 ? `<span class="down"> ▼${-move}</span>` : '';
+    const need = r.qualified ? '' : `<span class="need">cần thêm ${usd(10000 - r.volume)} volume</span>`;
+    const d = r.delta;
+    const mine = !!myWallet && r.address.toLowerCase() === myWallet;
+    return `<tr class="${r.qualified ? 'q' : ''} ${mine ? 'mine' : ''}">
+      <td>${r.rank}${moveTxt}</td>
+      <td><a class="addr" href="https://bscscan.com/address/${r.address}" target="_blank" rel="noopener" title="${r.address}">${short(r.address)}</a>${mine ? '<span class="chip">Bạn</span>' : ''}${need}</td>
+      <td><b>${fmt(r.points)}</b></td>
+      <td>${usd(r.volume)}</td>
+      <td class="hide-sm ${d > 0.5 ? 'up' : d < -0.5 ? 'down' : 'muted'}">${d > 0 ? '+' : ''}${fmt(d)}</td>
+      <td class="hide-sm muted">${r.official?.rank ?? '—'}</td>
+      <td class="hide-sm">${r.swaps}</td>
+      <td class="hide-sm muted">${r.lastTs ? new Date(r.lastTs * 1000).toLocaleString('vi-VN') : '—'}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="8" class="muted" style="text-align:center">Không có ví phù hợp</td></tr>';
+}
+
+let busy = false;
+async function doFetch() {
+  if (busy) return; busy = true;
+  $('#fetchBtn').disabled = true; $('#status').className = 'sub';
+  const t0 = Date.now();
+  const secs = () => Math.round((Date.now() - t0) / 1000);
+  try {
+    const j = await refresh({
+      extraWallets: myWallet ? [myWallet] : [],
+      onProgress: p => {
+        $('#status').textContent = `${p.stage}${p.total ? ` (${p.done}/${p.total})` : ''} · ${secs()}s`;
+        $('#bar').style.width = p.total ? (100 * p.done / p.total) + '%' : '5%';
+      },
+    });
+    data = j; render();
+    store.set('bstocks-last', JSON.stringify(j));
+    $('#status').textContent = `Đã cập nhật lúc ${when(j.fetchedAt)} · mất ${secs()}s`;
+  } catch (e) { $('#status').className = 'sub err'; $('#status').textContent = 'Lỗi: ' + e.message + ' — thử bấm Fetch lại.'; }
+  finally { $('#bar').style.width = '100%'; $('#fetchBtn').disabled = false; busy = false; }
+}
+
+$('#fetchBtn').onclick = doFetch;
+$('#search').oninput = render;
+$('#meSave').onclick = () => {
+  const a = $('#meInput').value.trim().toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(a)) return alert('Địa chỉ ví không hợp lệ');
+  myWallet = a; store.set('bstocks-my-wallet', a); renderMe(); doFetch();
+};
+$('#meInput').onkeydown = e => { if (e.key === 'Enter') $('#meSave').click(); };
+$('#meEdit').onclick = e => { e.preventDefault(); $('#meInput').value = myWallet; myWallet = ''; store.set('bstocks-my-wallet', null); renderMe(); render(); };
+document.querySelectorAll('th[data-k]').forEach(th => th.onclick = () => {
+  const k = th.dataset.k; sortDir = sortKey === k ? -sortDir : (['rank', 'orank', 'address'].includes(k) ? 1 : -1); sortKey = k; render();
+});
+try { const j = JSON.parse(store.get('bstocks-last')); if (j?.rows) { data = j; $('#status').textContent = `Dữ liệu lần trước: ${when(j.fetchedAt)} — bấm Fetch để cập nhật.`; } } catch {}
+renderMe(); render();
+</script>
+</body>
+</html>
