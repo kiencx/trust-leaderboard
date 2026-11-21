@@ -228,7 +228,7 @@ async function doFetch() {
     });
     data = j; render();
     store.set('bstocks-last', JSON.stringify(j));
-    $('#status').textContent = `Đã cập nhật lúc ${when(j.fetchedAt)} · mất ${secs()}s · tự cập nhật mỗi 2 phút`;
+    $('#status').textContent = `Đã cập nhật lúc ${when(j.fetchedAt)} · mất ${secs()}s`;
   } catch (e) { $('#status').className = 'sub err'; $('#status').textContent = 'Lỗi: ' + e.message + ' — thử bấm Fetch lại.'; }
   finally { $('#bar').style.width = '100%'; $('#fetchBtn').disabled = false; busy = false; }
 }
@@ -248,15 +248,8 @@ document.querySelectorAll('th[data-k]').forEach(th => th.onclick = () => {
 try { const j = JSON.parse(store.get('bstocks-last')); if (j?.rows) { data = j; $('#status').textContent = `Dữ liệu lần trước: ${when(j.fetchedAt)} — đang cập nhật…`; } } catch {}
 renderMe(); render();
 
-// Auto-fetch: right away on page load, then every 2 minutes while the tab is visible
-// (after the first scan each refresh only reads new blocks, so it takes ~1s).
-const AUTO_MS = 120_000;
-let lastAuto = 0;
-const autoFetch = () => { if (document.visibilityState === 'visible' && Date.now() - lastAuto >= AUTO_MS - 1000) { lastAuto = Date.now(); doFetch(); } };
-$('#fetchBtn').addEventListener('click', () => { lastAuto = Date.now(); });
-setInterval(autoFetch, 10_000);
-document.addEventListener('visibilitychange', autoFetch);
-autoFetch();
+// Fetch once on page load; after that the user refreshes with the Fetch button.
+doFetch();
 </script>
 </body>
 </html>

@@ -7,7 +7,7 @@ export const START_TS = Date.parse('2026-11-20T02:00:00Z') / 1000;
 export const END_TS = Date.parse('2026-12-04T02:00:00Z') / 1000;
 export const QUALIFY_USD = 10_000;
 const MIN_TX_USD = 10;
-const CHUNK = 50_000; // publicnode max block range for eth_getLogs
+const CHUNK = 25_000; // smaller windows answer faster on the public RPC (max allowed is 50k)
 const CACHE_KEY = 'bstocks-cache-v1';
 
 // Trust Wallet swaps observed on-chain go through this router (EOA wallets)
@@ -60,6 +60,28 @@ async function rpc(method, params, attempt = 0) {
     return rpc(method, params, attempt + 1);
   }
 }
+// eth_getLogs with retries; if a range keeps failing (node errors, timeouts, result caps),
+// split it in half and query each half separately.
+async function getLogsRange(f, t, address, topics, depth = 0) {
+  let lastErr;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const r = await fetch(RPCS[attempt % RPCS.length], { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: ++rpcId, method: 'eth_getLogs', params: [{ fromBlock: hex(f), toBlock: hex(t), address, topics }] }), signal: AbortSignal.timeout(45_000) });
+      const j = await r.json();
+      if (j.error) throw new Error(j.error.message || JSON.stringify(j.error));
+      return j.result;
+    } catch (e) {
+      lastErr = e;
+      if (/max results|exceed|too large|limit/i.test(e.message)) break; // retrying the same range won't help
+      await sleep(1500 * (attempt + 1));
+    }
+  }
+  if (t - f < 2000 || depth >= 4) throw new Error('eth_getLogs: ' + lastErr.message);
+  const m = (f + t) >> 1;
+  const a = await getLogsRange(f, m, address, topics, depth + 1);
+  const b = await getLogsRange(m + 1, t, address, topics, depth + 1);
+  return a.concat(b);
+}
 async function rpcBatch(calls) {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -102,38 +124,51 @@ export async function refresh({ extraWallets = [], onProgress = () => {} } = {})
   if (!cache.startBlock) { step('Đang tìm block bắt đầu chiến dịch'); cache.startBlock = await blockAtTs(START_TS, head); }
   if (headTs > END_TS) head = cache.endBlock ||= (await blockAtTs(END_TS, head)) - 1;
 
+  // Scan block windows per wallet group. Progress is saved after every finished window,
+  // so if the public RPC fails midway, the next Fetch continues where this one stopped.
   const byFrom = {};
   for (const w of wallets) { const from = (cache.scanned[w] ?? cache.startBlock - 1) + 1; if (from <= head) (byFrom[from] ||= []).push(w); }
-  const jobs = [];
+  const windows = [];
   for (const [fromStr, ws] of Object.entries(byFrom)) {
     for (let i = 0; i < ws.length; i += 100) {
-      const topicAddrs = ws.slice(i, i + 100).map(pad);
-      for (let f = +fromStr; f <= head; f += CHUNK) {
-        const t = Math.min(head, f + CHUNK - 1);
-        for (const g of TOKEN_GROUPS) jobs.push({ f, t, g, topics: [TRANSFER, topicAddrs] }, { f, t, g, topics: [TRANSFER, null, topicAddrs] });
-      }
+      const group = { wallets: ws.slice(i, i + 100), done: new Set(), next: +fromStr };
+      const topicAddrs = group.wallets.map(pad);
+      for (let f = +fromStr; f <= head; f += CHUNK) windows.push({ group, f, t: Math.min(head, f + CHUNK - 1), topicAddrs });
     }
   }
-  let done = 0;
-  step('Đang quét giao dịch on-chain (BSC)', 0, jobs.length);
-  await pool(jobs, 6, async j => {
-    const logs = await rpc('eth_getLogs', [{ fromBlock: hex(j.f), toBlock: hex(j.t), address: j.g, topics: j.topics }]);
+  const markDone = win => {
+    const g = win.group; g.done.add(win.f);
+    while (g.done.has(g.next)) { const t = Math.min(head, g.next + CHUNK - 1); for (const w of g.wallets) cache.scanned[w] = t; g.next = t + 1; }
+    saveCache(cache);
+  };
+  const addLogs = logs => {
     for (const l of logs) cache.logs[l.transactionHash + ':' + parseInt(l.logIndex)] = [
       l.transactionHash, l.address.toLowerCase(), '0x' + l.topics[1].slice(26), '0x' + l.topics[2].slice(26), l.data, parseInt(l.blockTimestamp || 0), parseInt(l.blockNumber),
     ];
-    step('Đang quét giao dịch on-chain (BSC)', ++done, jobs.length);
-  });
-  for (const w of wallets) cache.scanned[w] = head;
+  };
+  let done = 0;
+  try {
+    step('Đang quét giao dịch on-chain (BSC)', 0, windows.length);
+    await pool(windows, 2, async win => {
+      const jobs = TOKEN_GROUPS.flatMap(g => [[TRANSFER, win.topicAddrs], [TRANSFER, null, win.topicAddrs]].map(topics => ({ g, topics })));
+      await pool(jobs, 3, async j => addLogs(await getLogsRange(win.f, win.t, j.g, j.topics)));
+      markDone(win);
+      step('Đang quét giao dịch on-chain (BSC)', ++done, windows.length);
+    });
 
-  const missing = [...new Set(Object.values(cache.logs).map(l => l[0]))].filter(h => !(h in cache.txTo));
-  const batches = []; for (let i = 0; i < missing.length; i += 50) batches.push(missing.slice(i, i + 50));
-  done = 0;
-  step('Đang kiểm tra router của giao dịch', 0, batches.length);
-  await pool(batches, 3, async b => {
-    const res = await rpcBatch(b.map(h => ['eth_getTransactionByHash', [h]]));
-    b.forEach((h, i) => { if (res[i]) cache.txTo[h] = (res[i].to || '').toLowerCase(); });
-    step('Đang kiểm tra router của giao dịch', ++done, batches.length);
-  });
+    const missing = [...new Set(Object.values(cache.logs).map(l => l[0]))].filter(h => !(h in cache.txTo));
+    const batches = []; for (let i = 0; i < missing.length; i += 50) batches.push(missing.slice(i, i + 50));
+    done = 0;
+    step('Đang kiểm tra router của giao dịch', 0, batches.length);
+    await pool(batches, 3, async b => {
+      const res = await rpcBatch(b.map(h => ['eth_getTransactionByHash', [h]]));
+      b.forEach((h, i) => { if (res[i]) cache.txTo[h] = (res[i].to || '').toLowerCase(); });
+      step('Đang kiểm tra router của giao dịch', ++done, batches.length);
+    });
+  } catch (e) {
+    saveCache(cache);
+    throw new Error(`RPC công khai của BSC đang quá tải (${e.message}). Phần đã quét đã được lưu — bấm Fetch để quét tiếp.`);
+  }
   saveCache(cache);
 
   step('Đang lấy giá token (DexScreener)');
