@@ -188,7 +188,9 @@ function renderMe() {
   $('#meVol').textContent = usd(me.volume);
   $('#meReward').innerHTML = me.points <= 0 ? '<span class="muted">—</span>'
     : me.qualified ? `${fmt(me.reward)} USDC <span class="sub">(hạng tính thưởng #${me.rewardRank})</span>` : `<span class="warn">0</span> <span class="sub">(chưa đủ $10k volume)</span>`;
-  $('#meFee').innerHTML = `${money(me.feeLost)} <span class="sub">${money(me.costPer1k, 3)}/1k điểm · gas ${money(me.gasUsd, 3)}</span>`;
+  $('#meFee').innerHTML = `${money(me.feeLost)} <span class="sub">${money(me.costPer1k, 3)}/1k điểm</span>`
+    + `<span class="need">Spread: <b>${money(me.spreadLoss ?? 0)}</b></span>`
+    + `<span class="need">Gas: <b>${(me.gasBnb ?? 0).toFixed(6)} BNB</b> ≈ ${money(me.gasUsd ?? 0, 3)}${data.bnbUsd ? ` (BNB $${Math.round(data.bnbUsd).toLocaleString('en-US')})` : ''}</span>`;
   $('#meProfit').innerHTML = signed(me.profit);
   const pct = Math.min(100, me.volume / 100);
   $('#meQualTxt').innerHTML = me.qualified ? '<span class="up">✓ Đã đủ điều kiện ($10,000 volume)</span>'

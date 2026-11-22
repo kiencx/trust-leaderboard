@@ -220,7 +220,7 @@ export async function refresh({ extraWallets = [], detailWallet = '', onProgress
     for (const [w, dir] of [[from, 'out'], [to, 'in']]) if (W.has(w)) (perTx[w + '|' + tx] ||= []).push({ tx, token, ts, block, qty, dir });
   }
   const stats = {}, events = {};
-  for (const w of wallets) { stats[w] = { volume: 0, points: 0, swaps: 0, excluded: 0, lastTs: 0, gasUsd: 0, spreadLoss: 0, history: [] }; events[w] = []; }
+  for (const w of wallets) { stats[w] = { volume: 0, points: 0, swaps: 0, excluded: 0, lastTs: 0, gasUsd: 0, gasBnb: 0, spreadLoss: 0, history: [] }; events[w] = []; }
   for (const [k, legs] of Object.entries(perTx)) {
     const [w, tx] = k.split('|'); const s = stats[w];
     const ins = legs.some(x => x.dir === 'in'), outs = legs.some(x => x.dir === 'out');
@@ -237,7 +237,7 @@ export async function refresh({ extraWallets = [], detailWallet = '', onProgress
     if (usd < MIN_TX_USD) { s.excluded++; continue; }
     const mult = BOOSTED.has(token) ? 1.5 : 1;
     const gasUsd = gasBnb * bnbUsd;
-    s.volume += usd; s.swaps++; s.points += usd * mult; s.gasUsd += gasUsd;
+    s.volume += usd; s.swaps++; s.points += usd * mult; s.gasUsd += gasUsd; s.gasBnb += gasBnb;
     s.lastTs = Math.max(s.lastTs, legs[0].ts);
     const ev = { tx, ts: legs[0].ts, block: legs[0].block, token, sym: SYMBOL[token], qty, usd, gasUsd, mult, side: ins ? 'Mua' : 'Bán', priced: usd === real };
     s.history.push(ev); events[w].push(ev);
