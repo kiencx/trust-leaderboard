@@ -31,19 +31,43 @@ export const TOKENS = {
   BNCB: '0x4902c5ebc598265ed2212b559b042de8a5eeec3f',
 };
 const BOOSTED = new Set([TOKENS.ANTB, TOKENS.NVDAB]);
+const WBNB = '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c';
+const STABLES = new Set([
+  '0x55d398326f99059ff775485246999027b3197955', // USDT
+  '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d', // USDC
+  '0xc5f0f7b66764f6ec8c8dff7ba683102295e16409', // FDUSD
+  '0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d', // USD1
+]);
+const USEROP_EVENT = '0x49628fd1471006c1482da88028e9ce4dbb080b815c9b0344d39e5a8e6ec1419f';
 const SYMBOL = Object.fromEntries(Object.entries(TOKENS).map(([s, a]) => [a, s]));
 const TOKEN_GROUPS = (() => { const a = Object.values(TOKENS), g = []; for (let i = 0; i < a.length; i += 10) g.push(a.slice(i, i + 10)); return g; })();
 
-// ---------- cache (localStorage, per browser) ----------
-function emptyCache() { return { v: 1, startBlock: 0, endBlock: 0, scanned: {}, logs: {}, txTo: {} }; }
-export function loadCache() {
-  try { const c = JSON.parse(localStorage.getItem(CACHE_KEY)); if (c?.v === 1) return c; } catch {}
-  return emptyCache();
+// ---------- cache (IndexedDB, per browser; localStorage is too small once receipts are cached) ----------
+function emptyCache() { return { v: 1, startBlock: 0, endBlock: 0, scanned: {}, logs: {}, rx: {} }; }
+let dbp;
+const idb = () => dbp ||= new Promise((res, rej) => {
+  const r = indexedDB.open('bstocks', 1);
+  r.onupgradeneeded = () => r.result.createObjectStore('kv');
+  r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+});
+export async function idbGet(k) {
+  try { const db = await idb(); return await new Promise((res, rej) => { const q = db.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); }
+  catch { return undefined; }
 }
-function saveCache(c) {
-  try { localStorage.setItem(CACHE_KEY, JSON.stringify(c)); } catch { /* quota or blocked storage: keep in memory only */ }
+export async function idbSet(k, v) {
+  try { const db = await idb(); await new Promise((res, rej) => { const t = db.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = res; t.onerror = () => rej(t.error); }); }
+  catch { /* storage blocked: keep in memory only */ }
 }
-export function clearCache() { try { localStorage.removeItem(CACHE_KEY); } catch {} }
+export async function loadCache() {
+  let c = await idbGet(CACHE_KEY);
+  if (!c) { try { c = JSON.parse(localStorage.getItem(CACHE_KEY)); localStorage.removeItem(CACHE_KEY); } catch {} } // migrate old cache
+  if (c?.v !== 1) return emptyCache();
+  c.rx ||= {}; delete c.txTo;
+  for (const h in c.rx) if (!c.rx[h]) delete c.rx[h];
+  return c;
+}
+const saveCache = c => idbSet(CACHE_KEY, c);
+export async function clearCache() { await idbSet(CACHE_KEY, emptyCache()); }
 
 // ---------- rpc ----------
 let rpcId = 0;
@@ -109,8 +133,8 @@ export async function pool(items, n, fn) {
 }
 
 // ---------- main ----------
-export async function refresh({ extraWallets = [], onProgress = () => {} } = {}) {
-  const cache = loadCache();
+export async function refresh({ extraWallets = [], detailWallet = '', onProgress = () => {} } = {}) {
+  const cache = await loadCache();
   const step = (stage, done = 0, total = 0) => onProgress({ stage, done, total });
 
   step('Đang lấy danh sách ví chính thức');
@@ -156,15 +180,25 @@ export async function refresh({ extraWallets = [], onProgress = () => {} } = {})
       step('Đang quét giao dịch on-chain (BSC)', ++done, windows.length);
     });
 
-    const missing = [...new Set(Object.values(cache.logs).map(l => l[0]))].filter(h => !(h in cache.txTo));
-    const batches = []; for (let i = 0; i < missing.length; i += 50) batches.push(missing.slice(i, i + 50));
-    done = 0;
-    step('Đang kiểm tra router của giao dịch', 0, batches.length);
-    await pool(batches, 3, async b => {
-      const res = await rpcBatch(b.map(h => ['eth_getTransactionByHash', [h]]));
-      b.forEach((h, i) => { if (res[i]) cache.txTo[h] = (res[i].to || '').toLowerCase(); });
-      step('Đang kiểm tra router của giao dịch', ++done, batches.length);
-    });
+    // Receipts: which contract the tx went to (Trust Wallet route?), stablecoins paid/received, gas paid.
+    const walletsByTx = {};
+    const Wset = new Set(wallets);
+    for (const [tx, , from, to] of Object.values(cache.logs)) for (const w of [from, to]) if (Wset.has(w)) (walletsByTx[tx] ||= new Set()).add(w);
+    // The public RPC rate-limits items inside a batch, so retry the ones that came back empty.
+    const total = Object.keys(walletsByTx).filter(h => !cache.rx[h]).length;
+    for (let round = 0; round < 5; round++) {
+      const missing = Object.keys(walletsByTx).filter(h => !cache.rx[h]);
+      if (!missing.length) break;
+      if (round) await sleep(2000 * round);
+      const size = round ? 10 : 20;
+      const batches = []; for (let i = 0; i < missing.length; i += size) batches.push(missing.slice(i, i + size));
+      await pool(batches, round ? 2 : 3, async b => {
+        const res = await rpcBatch(b.map(h => ['eth_getTransactionReceipt', [h]]));
+        b.forEach((h, i) => { if (res[i]) cache.rx[h] = digestReceipt(res[i], walletsByTx[h]); });
+        step('Đang đọc receipt giao dịch (tiền trả/nhận, gas)', total - Object.keys(walletsByTx).filter(h => !cache.rx[h]).length, total);
+      });
+      await saveCache(cache);
+    }
   } catch (e) {
     saveCache(cache);
     throw new Error(`RPC công khai của BSC đang quá tải (${e.message}). Phần đã quét đã được lưu — bấm Fetch để quét tiếp.`);
@@ -173,40 +207,102 @@ export async function refresh({ extraWallets = [], onProgress = () => {} } = {})
 
   step('Đang lấy giá token (DexScreener)');
   const price = {};
-  const ds = await fetch('https://api.dexscreener.com/tokens/v1/bsc/' + Object.values(TOKENS).join(','), { signal: AbortSignal.timeout(30_000) }).then(r => r.json());
+  const ds = await fetch('https://api.dexscreener.com/tokens/v1/bsc/' + [...Object.values(TOKENS), WBNB].join(','), { signal: AbortSignal.timeout(30_000) }).then(r => r.json());
   for (const p of ds) { const a = p.baseToken.address.toLowerCase(); const liq = p.liquidity?.usd || 0; if (!price[a] || liq > price[a].liq) price[a] = { usd: +p.priceUsd, liq }; }
+  const bnbUsd = price[WBNB]?.usd || 0;
 
   // ---------- compute ----------
   const W = new Set(wallets);
   const perTx = {};
   for (const [tx, token, from, to, amount, ts, block] of Object.values(cache.logs)) {
     if (block < cache.startBlock || block > head) continue;
-    const usd = Number(BigInt(amount)) / 1e18 * (price[token]?.usd || 0);
-    for (const [w, dir] of [[from, 'out'], [to, 'in']]) if (W.has(w)) (perTx[w + '|' + tx] ||= []).push({ tx, token, ts, usd, dir });
+    const qty = Number(BigInt(amount)) / 1e18;
+    for (const [w, dir] of [[from, 'out'], [to, 'in']]) if (W.has(w)) (perTx[w + '|' + tx] ||= []).push({ tx, token, ts, block, qty, dir });
   }
-  const stats = {};
-  for (const w of wallets) stats[w] = { volume: 0, points: 0, swaps: 0, excluded: 0, lastTs: 0, history: [] };
+  const stats = {}, events = {};
+  for (const w of wallets) { stats[w] = { volume: 0, points: 0, swaps: 0, excluded: 0, lastTs: 0, gasUsd: 0, spreadLoss: 0, history: [] }; events[w] = []; }
   for (const [k, legs] of Object.entries(perTx)) {
     const [w, tx] = k.split('|'); const s = stats[w];
     const ins = legs.some(x => x.dir === 'in'), outs = legs.some(x => x.dir === 'out');
-    if (ins && outs) { s.excluded++; continue; }                     // bStock -> bStock / self transfer
-    if (!ALLOWED_TX_TO.has(cache.txTo[tx])) { s.excluded++; continue; } // not via the Trust Wallet swap route
-    const usd = legs.reduce((a, x) => a + x.usd, 0);
+    const rx = cache.rx[tx];
+    if (ins && outs) { s.excluded++; continue; }                      // bStock -> bStock / self transfer
+    if (!rx) s.noReceipt = (s.noReceipt || 0) + 1;                     // receipt not loaded yet: assume Trust Wallet route
+    else if (!ALLOWED_TX_TO.has(rx[0])) { s.excluded++; continue; }    // not via the Trust Wallet swap route
+    const token = legs[0].token, qty = legs.reduce((a, x) => a + (x.token === token ? x.qty : 0), 0);
+    const marketUsd = legs.reduce((a, x) => a + x.qty * (price[x.token]?.usd || 0), 0);
+    // Prefer the real stablecoin amount paid/received in this tx; fall back to the current market value.
+    const [stable = 0, gasBnb = 0] = rx[1]?.[w] || [];
+    const real = ins ? -stable : stable;
+    const usd = real > 0 && (!marketUsd || Math.abs(real / marketUsd - 1) < 0.5) ? real : marketUsd;
     if (usd < MIN_TX_USD) { s.excluded++; continue; }
-    s.volume += usd; s.swaps++;
-    s.points += legs.reduce((a, x) => a + x.usd * (BOOSTED.has(x.token) ? 1.5 : 1), 0);
+    const mult = BOOSTED.has(token) ? 1.5 : 1;
+    const gasUsd = gasBnb * bnbUsd;
+    s.volume += usd; s.swaps++; s.points += usd * mult; s.gasUsd += gasUsd;
     s.lastTs = Math.max(s.lastTs, legs[0].ts);
-    s.history.push({ tx, ts: legs[0].ts, token: SYMBOL[legs[0].token], side: ins ? 'Mua' : 'Bán', usd });
+    const ev = { tx, ts: legs[0].ts, block: legs[0].block, token, sym: SYMBOL[token], qty, usd, gasUsd, mult, side: ins ? 'Mua' : 'Bán', priced: usd === real };
+    s.history.push(ev); events[w].push(ev);
   }
+
+  // Round trips with average cost per token: each sell is matched against the tokens bought during the campaign.
+  for (const w of wallets) {
+    const s = stats[w], pos = {}; const rounds = [];
+    for (const e of events[w].sort((a, b) => a.block - b.block || a.ts - b.ts)) {
+      const p = pos[e.token] ||= { qty: 0, cost: 0, gas: 0 };
+      if (e.side === 'Mua') { p.qty += e.qty; p.cost += e.usd; p.gas += e.gasUsd; continue; }
+      const matched = Math.min(e.qty, p.qty);
+      if (matched <= 1e-12) continue; // selling tokens bought before the campaign: no cost basis
+      const share = matched / p.qty, basis = p.cost * share, buyGas = p.gas * share;
+      const proceeds = e.usd * matched / e.qty;
+      const loss = basis - proceeds;
+      p.qty -= matched; p.cost -= basis; p.gas -= buyGas;
+      s.spreadLoss += loss;
+      rounds.push({ ts: e.ts, tx: e.tx, token: SYMBOL[e.token], buyUsd: basis, sellUsd: proceeds, loss, spreadPct: basis ? loss / basis : 0, gasUsd: buyGas + e.gasUsd * matched / e.qty, points: (basis + proceeds) * e.mult });
+    }
+    s.feeLost = s.spreadLoss + s.gasUsd;
+    s.open = Object.entries(pos).filter(([, p]) => p.qty > 1e-9).map(([t, p]) => ({ token: SYMBOL[t], qty: p.qty, cost: p.cost, gasUsd: p.gas }));
+    s.rounds = rounds.reverse();
+  }
+
+  let qRank = 0;
   const rows = wallets.map(w => {
     const o = officialMap[w];
     stats[w].history.sort((a, b) => b.ts - a.ts);
+    if (w !== detailWallet.toLowerCase()) { delete stats[w].history; delete stats[w].rounds; } // keep the result small
     return { address: o?.address || w, ...stats[w], qualified: stats[w].volume >= QUALIFY_USD, official: o ? { rank: o.rank, volume: +o.volume, points: +o.points } : null };
-  }).sort((a, b) => b.points - a.points).map((r, i) => ({ ...r, rank: i + 1 }));
+  }).sort((a, b) => b.points - a.points).map((r, i) => {
+    const rewardRank = r.qualified ? ++qRank : null;         // only wallets with >= $10k volume are eligible
+    const reward = rewardRank ? rewardFor(rewardRank) : 0;
+    return { ...r, rank: i + 1, rewardRank, reward, profit: reward - r.feeLost, costPer1k: r.points ? r.feeLost / r.points * 1000 : 0 };
+  });
 
   return {
     fetchedAt: new Date().toISOString(), headBlock: head, headTime: new Date(Math.min(headTs, END_TS) * 1000).toISOString(),
-    officialUpdatedAt: official.last_updated_at, endsAt: new Date(END_TS * 1000).toISOString(),
-    prices: Object.fromEntries(Object.entries(price).map(([a, p]) => [SYMBOL[a], p.usd])), rows,
+    officialUpdatedAt: official.last_updated_at, endsAt: new Date(END_TS * 1000).toISOString(), bnbUsd,
+    noReceipt: Object.values(stats).reduce((a, s) => a + (s.noReceipt || 0), 0),
+    prices: Object.fromEntries(Object.entries(price).filter(([a]) => SYMBOL[a]).map(([a, p]) => [SYMBOL[a], p.usd])), rows,
   };
+}
+
+export const TIERS = [[1, 10000], [2, 6000], [3, 4000], [10, 1500], [20, 750], [50, 400], [100, 250], [200, 215], [300, 160]];
+export const rewardFor = rank => (TIERS.find(([max]) => rank <= max) || [0, 0])[1];
+
+// Keep only what we need from a receipt: [txTo, { wallet: [stablecoinDeltaUsd, gasPaidBnb] }]
+function digestReceipt(r, walletsInTx) {
+  const out = {};
+  for (const w of walletsInTx) out[w] = [0, 0];
+  for (const l of r.logs) {
+    const t0 = l.topics[0];
+    if (t0 === TRANSFER && l.topics.length === 3 && STABLES.has(l.address.toLowerCase()) && l.data.length > 2) {
+      const from = '0x' + l.topics[1].slice(26), to = '0x' + l.topics[2].slice(26), v = Number(BigInt(l.data)) / 1e18;
+      if (out[from]) out[from][0] -= v;
+      if (out[to]) out[to][0] += v;
+    } else if (t0 === USEROP_EVENT) { // ERC-4337: gas is paid by the smart account (data[2] = actualGasCost)
+      const sender = '0x' + l.topics[2].slice(26);
+      if (out[sender]) out[sender][1] += Number(BigInt('0x' + l.data.slice(2 + 128, 2 + 192))) / 1e18;
+    }
+  }
+  const from = (r.from || '').toLowerCase();
+  if (out[from]) out[from][1] += Number(BigInt(r.gasUsed) * BigInt(r.effectiveGasPrice || 0)) / 1e18;
+  for (const w in out) out[w] = out[w].map(x => Math.round(x * 1e9) / 1e9); // keep the cache small
+  return [(r.to || '').toLowerCase(), out];
 }

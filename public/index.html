@@ -92,9 +92,12 @@
         <div><b>Điểm</b><span class="big" id="mePts">—</span></div>
         <div><b>Volume</b><span class="mid" id="meVol">—</span></div>
         <div><b>Thưởng nếu giữ hạng</b><span class="mid" id="meReward">—</span></div>
+        <div><b>Phí đã mất (spread + gas)</b><span class="mid" id="meFee">—</span></div>
+        <div><b>Lãi dự kiến</b><span class="mid" id="meProfit">—</span></div>
       </div>
       <div style="margin-top:14px"><b class="sub" id="meQualTxt"></b><div class="bar"><i id="meQualBar"></i></div></div>
       <div class="me-notes" id="meNotes"></div>
+      <details class="me-hist" open><summary id="meRoundSum">Các vòng swap</summary><div class="tbl" id="meRounds"></div></details>
       <details class="me-hist"><summary id="meHistSum">Swap đã được tính</summary><div class="tbl" id="meHist"></div></details>
     </div>
   </div>
@@ -132,8 +135,9 @@
     <table>
       <thead><tr>
         <th data-k="rank">#</th><th data-k="address">Ví</th><th data-k="points">Điểm (live)</th>
-        <th data-k="volume">Volume (live)</th><th data-k="delta" class="hide-sm">Δ điểm so với bảng TW</th>
-        <th data-k="orank" class="hide-sm">Hạng TW</th><th data-k="swaps" class="hide-sm">Swap</th><th data-k="lastTs" class="hide-sm">Swap gần nhất</th>
+        <th data-k="volume">Volume (live)</th><th data-k="feeLost">Phí đã mất</th>
+        <th data-k="rewardRank" class="hide-sm">Hạng tính thưởng</th><th data-k="profit">Lãi dự kiến</th>
+        <th data-k="delta" class="hide-sm">Δ điểm so với bảng TW</th><th data-k="orank" class="hide-sm">Hạng TW</th>
       </tr></thead>
       <tbody id="rows"><tr><td colspan="8" class="muted" style="text-align:center">Chưa có dữ liệu</td></tr></tbody>
     </table>
@@ -147,7 +151,7 @@
   </details>
 </div>
 <script type="module">
-import { refresh } from './engine.js';
+import { refresh, TIERS, rewardFor } from './engine.js';
 import { fetchFees, bucketize, feeStatus } from './fees.js';
 const $ = s => document.querySelector(s);
 const store = {
@@ -161,8 +165,8 @@ const short = a => a.slice(0, 6) + '…' + a.slice(-4);
 const when = iso => iso ? new Date(iso).toLocaleString('vi-VN') : '—';
 let data = null, sortKey = 'rank', sortDir = 1;
 
-const TIERS = [[1,10000],[2,6000],[3,4000],[10,1500],[20,750],[50,400],[100,250],[200,215],[300,160]];
-const rewardFor = rank => (TIERS.find(([max]) => rank <= max) || [0, 0])[1];
+const money = (n, d = 2) => (n < 0 ? '−$' : '$') + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+const signed = n => `<span class="${n >= 0 ? 'up' : 'down'}">${n >= 0 ? '+' : ''}${money(n)}</span>`;
 
 function renderMe() {
   $('#meAddr').textContent = myWallet ? short(myWallet) : '';
@@ -182,9 +186,10 @@ function renderMe() {
   $('#meMove').innerHTML = me.official ? `<span class="sub">bảng TW: #${me.official.rank}</span>` : '<span class="sub">chưa có trên bảng TW</span>';
   $('#mePts').textContent = fmt(me.points);
   $('#meVol').textContent = usd(me.volume);
-  const reward = rewardFor(me.rank);
   $('#meReward').innerHTML = me.points <= 0 ? '<span class="muted">—</span>'
-    : me.qualified ? `${fmt(reward)} USDC` : `<span class="warn">0</span> <span class="sub">(chưa đủ $10k; hạng này = ${fmt(reward)} USDC)</span>`;
+    : me.qualified ? `${fmt(me.reward)} USDC <span class="sub">(hạng tính thưởng #${me.rewardRank})</span>` : `<span class="warn">0</span> <span class="sub">(chưa đủ $10k volume)</span>`;
+  $('#meFee').innerHTML = `${money(me.feeLost)} <span class="sub">${money(me.costPer1k, 3)}/1k điểm · gas ${money(me.gasUsd, 3)}</span>`;
+  $('#meProfit').innerHTML = signed(me.profit);
   const pct = Math.min(100, me.volume / 100);
   $('#meQualTxt').innerHTML = me.qualified ? '<span class="up">✓ Đã đủ điều kiện ($10,000 volume)</span>'
     : `Điều kiện nhận thưởng: ${usd(me.volume)} / $10,000 — còn thiếu <b class="warn">${usd(10000 - me.volume)}</b>`;
@@ -202,10 +207,18 @@ function renderMe() {
   if (n < 300) notes.push(`<span class="muted">Hiện mới có ${n} ví trên bảng (thưởng cho top 300), nên ví nào đủ $10k volume đều đang trong vùng nhận thưởng.</span>`);
   if (me.excluded) notes.push(`<span class="muted">${me.excluded} giao dịch không được tính (swap qua app/router khác, bStock→bStock hoặc dưới $10).</span>`);
   $('#meNotes').innerHTML = notes.map(x => `<div>• ${x}</div>`).join('');
+  const tm = ts => new Date(ts * 1000).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' });
+  const txLink = h => `<a class="addr" target="_blank" rel="noopener" href="https://bscscan.com/tx/${h}">${h.slice(0, 8)}…</a>`;
+  const rs = me.rounds || [], open = me.open || [];
+  $('#meRoundSum').textContent = `Các vòng swap (${rs.length} vòng${open.length ? ', đang giữ ' + open.map(o => o.token).join(', ') : ''})`;
+  const openRows = open.map(o => `<tr><td>—</td><td style="text-align:left">${o.token}</td><td>${money(o.cost)}</td><td>—</td><td class="muted">gas ${money(o.gasUsd, 4)}<span class="need warn">đang giữ ${o.qty.toFixed(6)} ${o.token}</span></td><td>${money(o.gasUsd, 4)}</td><td>—</td><td>—</td></tr>`).join('');
+  $('#meRounds').innerHTML = rs.length || open.length ? `<table><thead><tr><th>Bán lúc</th><th>Token</th><th>Mua vào</th><th>Bán ra</th><th>Phí đã mất</th><th>Gas</th><th>Điểm</th><th>Tx bán</th></tr></thead><tbody>${openRows}${
+    rs.map(r => { const lost = r.loss + r.gasUsd; return `<tr><td>${tm(r.ts)}</td><td style="text-align:left">${r.token}</td><td>${money(r.buyUsd)}</td><td>${money(r.sellUsd)}</td><td><b class="${lost > 0 ? 'down' : 'up'}">${money(lost, 3)}</b><span class="need">${(r.spreadPct * 100).toFixed(3)}% spread + gas</span></td><td>${money(r.gasUsd, 4)}</td><td>${fmt(r.points)}</td><td>${txLink(r.tx)}</td></tr>`; }).join('')
+  }</tbody></table><div class="sub" style="margin-top:6px">Mỗi vòng = một lần bán, ghép với lượng đã mua trước đó theo giá vốn bình quân. Số âm (xanh) nghĩa là vòng đó lời nhờ giá tăng.</div>` : '<div class="muted">Chưa có vòng nào.</div>';
   const h = me.history || [];
   $('#meHistSum').textContent = `Swap đã được tính (${h.length})`;
-  $('#meHist').innerHTML = h.length ? `<table><thead><tr><th>Thời gian</th><th>Loại</th><th>Token</th><th>USD</th><th>Tx</th></tr></thead><tbody>${
-    h.map(x => `<tr><td>${new Date(x.ts * 1000).toLocaleString('vi-VN')}</td><td style="text-align:left">${x.side}</td><td>${x.token}</td><td>${usd(x.usd)}</td><td><a class="addr" target="_blank" rel="noopener" href="https://bscscan.com/tx/${x.tx}">${x.tx.slice(0, 10)}…</a></td></tr>`).join('')
+  $('#meHist').innerHTML = h.length ? `<table><thead><tr><th>Thời gian</th><th>Loại</th><th>Token</th><th>USD</th><th>Gas</th><th>Tx</th></tr></thead><tbody>${
+    h.map(x => `<tr><td>${tm(x.ts)}</td><td style="text-align:left">${x.side}</td><td>${x.sym}</td><td>${money(x.usd)}${x.priced ? '' : '<span class="need">ước theo giá hiện tại</span>'}</td><td>${money(x.gasUsd, 4)}</td><td>${txLink(x.tx)}</td></tr>`).join('')
   }</tbody></table>` : '<div class="muted">Chưa có.</div>';
 }
 
@@ -220,7 +233,7 @@ function render() {
   $('#mEnd').textContent = when(data.endsAt);
   $('#prices').textContent = 'Giá dùng để tính: ' + Object.entries(data.prices).map(([s, p]) => `${s} $${p}`).join(' · ');
   const q = $('#search').value.trim().toLowerCase();
-  let rows = data.rows.map(r => ({ ...r, delta: r.official ? r.points - r.official.points : r.points, orank: r.official?.rank ?? 9999 }));
+  let rows = data.rows.map(r => ({ ...r, delta: r.official ? r.points - r.official.points : r.points, orank: r.official?.rank ?? 9999, rewardRank: r.rewardRank ?? 9999 }));
   if (q) rows = rows.filter(r => r.address.toLowerCase().includes(q));
   rows.sort((a, b) => { const x = a[sortKey], y = b[sortKey]; return (typeof x === 'string' ? x.localeCompare(y) : x - y) * sortDir; });
   $('#rows').innerHTML = rows.map(r => {
@@ -233,13 +246,14 @@ function render() {
       <td>${r.rank}${moveTxt}</td>
       <td><a class="addr" href="https://bscscan.com/address/${r.address}" target="_blank" rel="noopener" title="${r.address}">${short(r.address)}</a>${mine ? '<span class="chip">Bạn</span>' : ''}${need}</td>
       <td><b>${fmt(r.points)}</b></td>
-      <td>${usd(r.volume)}</td>
+      <td>${usd(r.volume)}<span class="need">${r.swaps} swap</span></td>
+      <td><b>${money(r.feeLost)}</b><span class="need">${money(r.costPer1k, 3)}/1k điểm</span></td>
+      <td class="hide-sm">${r.rewardRank < 9999 ? `#${r.rewardRank}<span class="need">${usd(r.reward)}</span>` : '<span class="muted">chưa đủ ĐK</span>'}</td>
+      <td>${signed(r.profit)}${r.reward ? `<span class="need">thưởng ${usd(r.reward)} · phí ${money(r.feeLost)}</span>` : ''}</td>
       <td class="hide-sm ${d > 0.5 ? 'up' : d < -0.5 ? 'down' : 'muted'}">${d > 0 ? '+' : ''}${fmt(d)}</td>
       <td class="hide-sm muted">${r.official?.rank ?? '—'}</td>
-      <td class="hide-sm">${r.swaps}</td>
-      <td class="hide-sm muted">${r.lastTs ? new Date(r.lastTs * 1000).toLocaleString('vi-VN') : '—'}</td>
     </tr>`;
-  }).join('') || '<tr><td colspan="8" class="muted" style="text-align:center">Không có ví phù hợp</td></tr>';
+  }).join('') || '<tr><td colspan="9" class="muted" style="text-align:center">Không có ví phù hợp</td></tr>';
 }
 
 let busy = false;
@@ -250,7 +264,7 @@ async function doFetch() {
   const secs = () => Math.round((Date.now() - t0) / 1000);
   try {
     const j = await refresh({
-      extraWallets: myWallet ? [myWallet] : [],
+      extraWallets: myWallet ? [myWallet] : [], detailWallet: myWallet,
       onProgress: p => {
         $('#status').textContent = `${p.stage}${p.total ? ` (${p.done}/${p.total})` : ''} · ${secs()}s`;
         $('#bar').style.width = p.total ? (100 * p.done / p.total) + '%' : '5%';
@@ -258,7 +272,7 @@ async function doFetch() {
     });
     data = j; render();
     store.set('bstocks-last', JSON.stringify(j));
-    $('#status').textContent = `Đã cập nhật lúc ${when(j.fetchedAt)} · mất ${secs()}s`;
+    $('#status').textContent = `Đã cập nhật lúc ${when(j.fetchedAt)} · mất ${secs()}s` + (j.noReceipt ? ` · còn ${j.noReceipt} giao dịch chưa đọc được receipt (tạm tính theo giá hiện tại) — bấm Fetch lại để đọc tiếp` : '');
   } catch (e) { $('#status').className = 'sub err'; $('#status').textContent = 'Lỗi: ' + e.message + ' — thử bấm Fetch lại.'; }
   finally { $('#bar').style.width = '100%'; $('#fetchBtn').disabled = false; busy = false; }
 }
@@ -273,9 +287,9 @@ $('#meSave').onclick = () => {
 $('#meInput').onkeydown = e => { if (e.key === 'Enter') $('#meSave').click(); };
 $('#meEdit').onclick = e => { e.preventDefault(); $('#meInput').value = myWallet; myWallet = ''; store.set('bstocks-my-wallet', null); renderMe(); render(); };
 document.querySelectorAll('th[data-k]').forEach(th => th.onclick = () => {
-  const k = th.dataset.k; sortDir = sortKey === k ? -sortDir : (['rank', 'orank', 'address'].includes(k) ? 1 : -1); sortKey = k; render();
+  const k = th.dataset.k; sortDir = sortKey === k ? -sortDir : (['rank', 'orank', 'address', 'rewardRank'].includes(k) ? 1 : -1); sortKey = k; render();
 });
-try { const j = JSON.parse(store.get('bstocks-last')); if (j?.rows) { data = j; $('#status').textContent = `Dữ liệu lần trước: ${when(j.fetchedAt)} — đang cập nhật…`; } } catch {}
+try { const j = JSON.parse(store.get('bstocks-last')); if (j?.rows && j.rows[0]?.feeLost !== undefined) { data = j; $('#status').textContent = `Dữ liệu lần trước: ${when(j.fetchedAt)} — đang cập nhật…`; } } catch {}
 renderMe(); render();
 
 // ---------- ANTB activity & round-trip cost ----------
