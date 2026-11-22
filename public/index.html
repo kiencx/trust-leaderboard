@@ -331,22 +331,36 @@ function drawFees() {
   svg.innerHTML = s;
 }
 
-async function loadFees() {
-  if (feeBusy) return; feeBusy = true; $('#feeBtn').disabled = true;
+// The fee card refreshes itself every 10s while the tab is visible (one small eth_getLogs per refresh).
+// The next refresh is only scheduled after the previous one finished, so requests never pile up.
+const FEE_AUTO_MS = 10_000;
+let feeTimer = null, feeLastOk = 0;
+function scheduleFees() {
+  clearTimeout(feeTimer);
+  if (document.visibilityState === 'visible') feeTimer = setTimeout(() => loadFees({ auto: true }), FEE_AUTO_MS);
+}
+async function loadFees({ auto = false } = {}) {
+  if (feeBusy) return; feeBusy = true; clearTimeout(feeTimer);
+  if (!auto) $('#feeBtn').disabled = true;
   const t0 = Date.now();
   try {
-    feeData = await fetchFees({ onProgress: (d, t) => { $('#feeStatus').textContent = `Đang đọc swap ANTB on-chain… (${d}/${t})`; } });
+    feeData = await fetchFees({ onProgress: (d, t) => { if (!auto || !feeData) $('#feeStatus').textContent = `Đang đọc swap ANTB on-chain… (${d}/${t})`; } });
     drawFees();
-    $('#feeStatus').textContent = `Cập nhật lúc ${new Date().toLocaleTimeString('vi-VN')} · mất ${Math.round((Date.now() - t0) / 1000)}s · phí đo cho lệnh cỡ $100–$1,000; lệnh lớn hơn sẽ trượt giá nhiều hơn.`;
-  } catch (e) { $('#feeStatus').textContent = 'Lỗi tải phí: ' + e.message; }
-  finally { feeBusy = false; $('#feeBtn').disabled = false; }
+    feeLastOk = Date.now();
+    $('#feeStatus').textContent = `Cập nhật lúc ${new Date().toLocaleTimeString('vi-VN')} · tự làm mới mỗi 10 giây khi tab đang mở · phí đo cho lệnh cỡ $100–$1,000; lệnh lớn hơn sẽ trượt giá nhiều hơn.`;
+  } catch (e) { $('#feeStatus').textContent = 'Lỗi tải phí: ' + e.message + ' — sẽ thử lại sau 10 giây.'; }
+  finally { feeBusy = false; $('#feeBtn').disabled = false; scheduleFees(); }
 }
-$('#feeBtn').onclick = loadFees;
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') { clearTimeout(feeTimer); return; }
+  if (Date.now() - feeLastOk >= FEE_AUTO_MS) loadFees({ auto: true }); else scheduleFees();
+});
+$('#feeBtn').onclick = () => loadFees();
 $('#feeSeg').onclick = e => { const b = e.target.closest('button'); if (!b) return; feeSize = +b.dataset.s; $('#feeSeg').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); drawFees(); };
 window.addEventListener('resize', drawFees);
-$('#fetchBtn').addEventListener('click', loadFees);
+$('#fetchBtn').addEventListener('click', () => loadFees());
 
-// Fetch once on page load; after that the user refreshes with the Fetch / Làm mới buttons.
+// Leaderboard: fetched once on page load, then with the Fetch button. Fee card: auto-refreshes (above).
 loadFees();
 doFetch();
 </script>
