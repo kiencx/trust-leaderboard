@@ -47,6 +47,21 @@
   .me-notes { margin-top:14px; display:flex; flex-direction:column; gap:4px; font-size:13px }
   .me-hist { margin-top:12px; font-size:13px }
   .me-hist table td, .me-hist table th { padding:5px 6px }
+  .fee-head { display:flex; flex-wrap:wrap; gap:8px 12px; align-items:center; justify-content:space-between }
+  .seg { display:inline-flex; background:var(--line); border-radius:999px; padding:3px }
+  .seg button { background:transparent; color:var(--muted); padding:6px 12px; font-size:13px }
+  .seg button.on { background:var(--brand); color:#fff }
+  .ghost { background:var(--chip); color:var(--brand); padding:7px 14px; font-size:13px }
+  .pills { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0 6px }
+  .pill { font-size:13px; padding:5px 11px; border-radius:999px; background:var(--chip); font-variant-numeric:tabular-nums }
+  .pill.low { background:#0a9b3a22; color:var(--up); font-weight:700 }
+  .pill.high { background:#d3333322; color:var(--down); font-weight:700 }
+  .pill.normal { font-weight:700 }
+  #feeChart { width:100%; height:240px; display:block }
+  #feeChart text { fill:var(--muted); font-size:11px }
+  .legend { display:flex; gap:14px; font-size:12px; color:var(--muted); margin-top:4px }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:-1px }
+  :root { --line-fee:#e0a800 }
   tr.mine td { background:var(--chip) }
   tr.mine td:first-child { box-shadow: inset 4px 0 0 var(--brand) }
 </style>
@@ -84,6 +99,20 @@
     </div>
   </div>
 
+  <div class="card" id="fees">
+    <div class="fee-head">
+      <div><b>Hoạt động & phí swap ANTB</b> <span class="sub">· toàn thị trường (mọi app)</span></div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <div class="seg" id="feeSeg"><button data-s="5" class="on">5 phút</button><button data-s="15">15 phút</button><button data-s="60">1 giờ</button></div>
+        <button class="ghost" id="feeBtn">Làm mới</button>
+      </div>
+    </div>
+    <div class="pills" id="feePills"><span class="pill">Đang tải…</span></div>
+    <svg id="feeChart" role="img" aria-label="Số lệnh và phí khứ hồi ANTB theo thời gian"></svg>
+    <div class="legend"><span><i style="background:var(--brand);opacity:.6"></i>Số lệnh swap</span><span><i style="background:var(--line-fee)"></i>Phí khứ hồi (%/vòng) — đường vàng càng thấp, swap càng rẻ</span></div>
+    <div class="sub" id="feeStatus" style="margin-top:6px"></div>
+  </div>
+
   <div class="card">
     <div class="meta">
       <div><b>Dữ liệu on-chain tới</b><span id="mHead">—</span></div>
@@ -119,6 +148,7 @@
 </div>
 <script type="module">
 import { refresh } from './engine.js';
+import { fetchFees, bucketize, feeStatus } from './fees.js';
 const $ = s => document.querySelector(s);
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -248,7 +278,62 @@ document.querySelectorAll('th[data-k]').forEach(th => th.onclick = () => {
 try { const j = JSON.parse(store.get('bstocks-last')); if (j?.rows) { data = j; $('#status').textContent = `Dữ liệu lần trước: ${when(j.fetchedAt)} — đang cập nhật…`; } } catch {}
 renderMe(); render();
 
-// Fetch once on page load; after that the user refreshes with the Fetch button.
+// ---------- ANTB activity & round-trip cost ----------
+let feeData = null, feeSize = 5, feeBusy = false;
+const pct = x => x == null ? '—' : (x * 100).toFixed(3) + '%';
+const WINDOW_H = { 5: 6, 15: 12, 60: 24 };
+
+function drawFees() {
+  if (!feeData) return;
+  const now = Math.floor(Date.now() / 1000);
+  const buckets = bucketize(feeData.minutes, feeSize).filter(b => b.ts >= now - WINDOW_H[feeSize] * 3600);
+  const st = feeStatus(feeData.minutes);
+  const label = { low: '🟢 Phí thấp — nên swap', normal: '⚪ Phí bình thường', high: '🔴 Phí cao — nên chờ', unknown: '⚪ Chưa đủ dữ liệu' }[st.level];
+  const cost10k = st.rt != null ? 5000 * st.rt : null; // one round trip of $S = $2S volume and costs $S × rt, so $10k volume costs $5,000 × rt
+  $('#feePills').innerHTML = [
+    `<span class="pill ${st.level}">${label}</span>`,
+    `<span class="pill">5 phút qua: ${st.n5} lệnh (thường ${st.normN ?? '—'})</span>`,
+    `<span class="pill">phí ≈ ${pct(st.rt)}/vòng (thường ${pct(st.normRt)})</span>`,
+    cost10k != null ? `<span class="pill">cày $10,000 volume ≈ $${cost10k.toFixed(2)} phí → 15,000 điểm</span>` : '',
+  ].join('');
+
+  const svg = $('#feeChart'), W = svg.clientWidth || 800, H = 240, L = 34, R = 50, T = 10, B = 24;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  if (!buckets.length) { svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" text-anchor="middle">Chưa có dữ liệu</text>`; return; }
+  const cw = (W - L - R) / buckets.length, maxN = Math.max(...buckets.map(b => b.n)) || 1;
+  const rts = buckets.map(b => b.rt).filter(x => x != null), maxRt = Math.max(...rts, 0.0001) * 1.1;
+  const y1 = v => T + (H - T - B) * (1 - v / maxN), y2 = v => T + (H - T - B) * (1 - v / maxRt);
+  let s = '';
+  for (const f of [0, 0.5, 1]) { const y = T + (H - T - B) * (1 - f); s += `<line x1="${L}" x2="${W - R}" y1="${y}" y2="${y}" stroke="var(--line)"/><text x="${L - 4}" y="${y + 4}" text-anchor="end">${Math.round(maxN * f)}</text><text x="${W - R + 4}" y="${y + 4}">${(maxRt * f * 100).toFixed(3)}%</text>`; }
+  buckets.forEach((b, i) => {
+    const x = L + i * cw;
+    s += `<rect x="${x + cw * 0.12}" y="${y1(b.n)}" width="${Math.max(1, cw * 0.76)}" height="${H - B - y1(b.n)}" fill="var(--brand)" opacity="${i === buckets.length - 1 ? 0.35 : 0.6}"><title>${new Date(b.ts * 1000).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })} · ${b.n} lệnh · $${fmt(b.usd)} · phí ${pct(b.rt)}/vòng</title></rect>`;
+  });
+  const pts = buckets.map((b, i) => b.rt == null ? null : `${L + i * cw + cw / 2},${y2(b.rt)}`).filter(Boolean);
+  s += `<polyline points="${pts.join(' ')}" fill="none" stroke="var(--line-fee)" stroke-width="2" stroke-linejoin="round"/>`;
+  buckets.forEach((b, i) => { if (b.rt != null) s += `<circle cx="${L + i * cw + cw / 2}" cy="${y2(b.rt)}" r="2.2" fill="var(--line-fee)"><title>phí ${pct(b.rt)}/vòng</title></circle>`; });
+  const every = Math.ceil(buckets.length / Math.max(2, Math.floor((W - L - R) / 70)));
+  buckets.forEach((b, i) => { if (i % every === 0) s += `<text x="${L + i * cw + cw / 2}" y="${H - 6}" text-anchor="middle">${new Date(b.ts * 1000).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</text>`; });
+  svg.innerHTML = s;
+}
+
+async function loadFees() {
+  if (feeBusy) return; feeBusy = true; $('#feeBtn').disabled = true;
+  const t0 = Date.now();
+  try {
+    feeData = await fetchFees({ onProgress: (d, t) => { $('#feeStatus').textContent = `Đang đọc swap ANTB on-chain… (${d}/${t})`; } });
+    drawFees();
+    $('#feeStatus').textContent = `Cập nhật lúc ${new Date().toLocaleTimeString('vi-VN')} · mất ${Math.round((Date.now() - t0) / 1000)}s · phí đo cho lệnh cỡ $100–$1,000; lệnh lớn hơn sẽ trượt giá nhiều hơn.`;
+  } catch (e) { $('#feeStatus').textContent = 'Lỗi tải phí: ' + e.message; }
+  finally { feeBusy = false; $('#feeBtn').disabled = false; }
+}
+$('#feeBtn').onclick = loadFees;
+$('#feeSeg').onclick = e => { const b = e.target.closest('button'); if (!b) return; feeSize = +b.dataset.s; $('#feeSeg').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); drawFees(); };
+window.addEventListener('resize', drawFees);
+$('#fetchBtn').addEventListener('click', loadFees);
+
+// Fetch once on page load; after that the user refreshes with the Fetch / Làm mới buttons.
+loadFees();
 doFetch();
 </script>
 </body>

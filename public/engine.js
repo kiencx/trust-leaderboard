@@ -48,7 +48,7 @@ export function clearCache() { try { localStorage.removeItem(CACHE_KEY); } catch
 // ---------- rpc ----------
 let rpcId = 0;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-async function rpc(method, params, attempt = 0) {
+export async function rpc(method, params, attempt = 0) {
   try {
     const r = await fetch(RPCS[attempt % RPCS.length], { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: ++rpcId, method, params }), signal: AbortSignal.timeout(40_000) });
     const j = await r.json();
@@ -62,7 +62,7 @@ async function rpc(method, params, attempt = 0) {
 }
 // eth_getLogs with retries; if a range keeps failing (node errors, timeouts, result caps),
 // split it in half and query each half separately.
-async function getLogsRange(f, t, address, topics, depth = 0) {
+export async function getLogsRange(f, t, address, topics, depth = 0) {
   let lastErr;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -92,7 +92,7 @@ async function rpcBatch(calls) {
     } catch (e) { if (attempt >= 4) throw e; await sleep(1000 * (attempt + 1)); }
   }
 }
-const hex = n => '0x' + n.toString(16);
+export const hex = n => '0x' + n.toString(16);
 const pad = a => '0x' + a.slice(2).padStart(64, '0');
 async function blockAtTs(ts, head) {
   let lo = head - 3_000_000, hi = head;
@@ -103,7 +103,7 @@ async function blockAtTs(ts, head) {
   }
   return hi;
 }
-async function pool(items, n, fn) {
+export async function pool(items, n, fn) {
   const q = [...items];
   await Promise.all(Array.from({ length: n }, async () => { while (q.length) await fn(q.shift()); }));
 }
