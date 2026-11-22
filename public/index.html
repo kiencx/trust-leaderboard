@@ -62,6 +62,13 @@
   .legend { display:flex; gap:14px; font-size:12px; color:var(--muted); margin-top:4px }
   .legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:-1px }
   :root { --line-fee:#e0a800 }
+  .size-tbl { margin-top:12px; border:1px solid var(--line); border-radius:10px; overflow-x:auto }
+  .size-tbl table th, .size-tbl table td { padding:8px 10px; font-size:13px }
+  .size-tbl table th { cursor:default; font-weight:500; line-height:1.25 }
+  .size-tbl table th:first-child, .size-tbl table td:first-child { text-align:left; font-weight:700 }
+  .size-tbl table tr:last-child td { border-bottom:0 }
+  .size-tbl tr.cheapest td { background:#0a9b3a14 }
+  .badge-cheap { display:inline-block; font-size:11px; font-weight:600; padding:1px 7px; border-radius:99px; background:#0a9b3a28; color:var(--up); margin-left:6px }
   tr.mine td { background:var(--chip) }
   tr.mine td:first-child { box-shadow: inset 4px 0 0 var(--brand) }
 </style>
@@ -113,6 +120,19 @@
     <div class="pills" id="feePills"><span class="pill">Đang tải…</span></div>
     <svg id="feeChart" role="img" aria-label="Số lệnh và phí khứ hồi ANTB theo thời gian"></svg>
     <div class="legend"><span><i style="background:var(--brand);opacity:.6"></i>Số lệnh swap</span><span><i style="background:var(--line-fee)"></i>Phí khứ hồi (%/vòng) — đường vàng càng thấp, swap càng rẻ</span></div>
+    <div class="size-tbl" id="feeSizeWrap" hidden>
+      <table>
+        <thead><tr>
+          <th>Mỗi lệnh</th>
+          <th>Spread 1 vòng<span class="need">trung bình qua Trust · điển hình, dự kiến 5–10 phút tới</span></th>
+          <th>Gas<span class="need">2 lệnh</span></th>
+          <th>Tổng / vòng<span class="need">trung bình</span></th>
+          <th>Cho 1,000 điểm<span class="need">trung bình</span></th>
+          <th>Mẫu<span class="need">mọi app · Trust</span></th>
+        </tr></thead>
+        <tbody id="feeSizeRows"></tbody>
+      </table>
+    </div>
     <div class="sub" id="feeStatus" style="margin-top:6px"></div>
   </div>
 
@@ -152,7 +172,7 @@
 </div>
 <script type="module">
 import { refresh, TIERS, rewardFor } from './engine.js';
-import { fetchFees, bucketize, feeStatus } from './fees.js';
+import { fetchFees, bucketize, feeStatus, sizeBreakdown } from './fees.js';
 const $ = s => document.querySelector(s);
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -272,7 +292,7 @@ async function doFetch() {
         $('#bar').style.width = p.total ? (100 * p.done / p.total) + '%' : '5%';
       },
     });
-    data = j; render();
+    data = j; render(); drawFees();
     store.set('bstocks-last', JSON.stringify(j));
     $('#status').textContent = `Đã cập nhật lúc ${when(j.fetchedAt)} · mất ${secs()}s` + (j.noReceipt ? ` · còn ${j.noReceipt} giao dịch chưa đọc được receipt (tạm tính theo giá hiện tại) — bấm Fetch lại để đọc tiếp` : '');
   } catch (e) { $('#status').className = 'sub err'; $('#status').textContent = 'Lỗi: ' + e.message + ' — thử bấm Fetch lại.'; }
@@ -318,7 +338,7 @@ function drawFees() {
   if (!buckets.length) { svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" text-anchor="middle">Chưa có dữ liệu</text>`; return; }
   const cw = (W - L - R) / buckets.length, maxN = Math.max(...buckets.map(b => b.n)) || 1;
   const rts = buckets.map(b => b.rt).filter(x => x != null), maxRt = Math.max(...rts, 0.0001) * 1.1;
-  const y1 = v => T + (H - T - B) * (1 - v / maxN), y2 = v => T + (H - T - B) * (1 - v / maxRt);
+  const y1 = v => T + (H - T - B) * (1 - v / maxN), y2 = v => T + (H - T - B) * (1 - Math.max(0, Math.min(1, v / maxRt)));
   let s = '';
   for (const f of [0, 0.5, 1]) { const y = T + (H - T - B) * (1 - f); s += `<line x1="${L}" x2="${W - R}" y1="${y}" y2="${y}" stroke="var(--line)"/><text x="${L - 4}" y="${y + 4}" text-anchor="end">${Math.round(maxN * f)}</text><text x="${W - R + 4}" y="${y + 4}">${(maxRt * f * 100).toFixed(3)}%</text>`; }
   buckets.forEach((b, i) => {
@@ -331,6 +351,17 @@ function drawFees() {
   const every = Math.ceil(buckets.length / Math.max(2, Math.floor((W - L - R) / 70)));
   buckets.forEach((b, i) => { if (i % every === 0) s += `<text x="${L + i * cw + cw / 2}" y="${H - 6}" text-anchor="middle">${new Date(b.ts * 1000).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</text>`; });
   svg.innerHTML = s;
+
+  const sRows = sizeBreakdown(feeData.bySize, data?.trustBrackets, st);
+  $('#feeSizeWrap').hidden = false;
+  $('#feeSizeRows').innerHTML = sRows.map(r => `<tr class="${r.cheapest ? 'cheapest' : ''}">
+    <td>${r.label}${r.cheapest ? '<span class="badge-cheap">rẻ nhất</span>' : ''}</td>
+    <td><b>${pct(r.spreadAvg)}</b><span class="need">điển hình ${pct(r.spreadTypical)}</span></td>
+    <td class="muted">${pct(r.gasPct)}</td>
+    <td><b>${pct(r.totalPct)}</b></td>
+    <td>$${r.costPer1k.toFixed(3)}</td>
+    <td class="muted">${fmt(r.marketCount)} · ${fmt(r.trustCount)}</td>
+  </tr>`).join('');
 }
 
 // The fee card refreshes itself every 10s while the tab is visible (one small eth_getLogs per refresh).

@@ -244,6 +244,8 @@ export async function refresh({ extraWallets = [], detailWallet = '', onProgress
   }
 
   // Round trips with average cost per token: each sell is matched against the tokens bought during the campaign.
+  const BRACKET_MAX = [100, 200, 400, 700, 1000, 2000, 5000, Infinity];
+  const bAcc = BRACKET_MAX.map(() => ({ count: 0, spreadSum: 0, spreadN: 0, gasPctSum: 0, gasUsdSum: 0 }));
   for (const w of wallets) {
     const s = stats[w], pos = {}; const rounds = [];
     for (const e of events[w].sort((a, b) => a.block - b.block || a.ts - b.ts)) {
@@ -254,14 +256,30 @@ export async function refresh({ extraWallets = [], detailWallet = '', onProgress
       const share = matched / p.qty, basis = p.cost * share, buyGas = p.gas * share;
       const proceeds = e.usd * matched / e.qty;
       const loss = basis - proceeds;
+      const spreadPct = basis ? loss / basis : 0;
+      const gasUsd = buyGas + e.gasUsd * matched / e.qty;
       p.qty -= matched; p.cost -= basis; p.gas -= buyGas;
       s.spreadLoss += loss;
-      rounds.push({ ts: e.ts, tx: e.tx, token: SYMBOL[e.token], buyUsd: basis, sellUsd: proceeds, loss, spreadPct: basis ? loss / basis : 0, gasUsd: buyGas + e.gasUsd * matched / e.qty, points: (basis + proceeds) * e.mult });
+      rounds.push({ ts: e.ts, tx: e.tx, token: SYMBOL[e.token], buyUsd: basis, sellUsd: proceeds, loss, spreadPct, gasUsd, points: (basis + proceeds) * e.mult });
+      if (basis >= 10) {
+        const bi = BRACKET_MAX.findIndex(m => basis < m);
+        const acc = bAcc[bi];
+        acc.count++;
+        acc.gasUsdSum += gasUsd;
+        acc.gasPctSum += gasUsd / basis;
+        if (spreadPct > 0 && spreadPct < 0.02) { acc.spreadSum += spreadPct; acc.spreadN++; }
+      }
     }
     s.feeLost = s.spreadLoss + s.gasUsd;
     s.open = Object.entries(pos).filter(([, p]) => p.qty > 1e-9).map(([t, p]) => ({ token: SYMBOL[t], qty: p.qty, cost: p.cost, gasUsd: p.gas }));
     s.rounds = rounds.reverse();
   }
+  const trustBrackets = bAcc.map(a => ({
+    count: a.count,
+    spreadMean: a.spreadN ? a.spreadSum / a.spreadN : null,
+    gasPctMean: a.count ? a.gasPctSum / a.count : null,
+    gasUsdSum: a.gasUsdSum,
+  }));
 
   let qRank = 0;
   const rows = wallets.map(w => {
@@ -279,7 +297,7 @@ export async function refresh({ extraWallets = [], detailWallet = '', onProgress
     fetchedAt: new Date().toISOString(), headBlock: head, headTime: new Date(Math.min(headTs, END_TS) * 1000).toISOString(),
     officialUpdatedAt: official.last_updated_at, endsAt: new Date(END_TS * 1000).toISOString(), bnbUsd,
     noReceipt: Object.values(stats).reduce((a, s) => a + (s.noReceipt || 0), 0),
-    prices: Object.fromEntries(Object.entries(price).filter(([a]) => SYMBOL[a]).map(([a, p]) => [SYMBOL[a], p.usd])), rows,
+    prices: Object.fromEntries(Object.entries(price).filter(([a]) => SYMBOL[a]).map(([a, p]) => [SYMBOL[a], p.usd])), rows, trustBrackets,
   };
 }
 
