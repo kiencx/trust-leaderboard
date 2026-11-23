@@ -287,13 +287,14 @@ async function doFetch() {
   try {
     const j = await refresh({
       extraWallets: myWallet ? [myWallet] : [], detailWallet: myWallet,
+      onPartial: partial => { data = partial; render(); drawFees(); },
       onProgress: p => {
         $('#status').textContent = `${p.stage}${p.total ? ` (${p.done}/${p.total})` : ''} · ${secs()}s`;
         $('#bar').style.width = p.total ? (100 * p.done / p.total) + '%' : '5%';
       },
     });
     data = j; render(); drawFees();
-    store.set('bstocks-last', JSON.stringify(j));
+    store.set('bstocks-last-v2', JSON.stringify(j));
     $('#status').textContent = `Đã cập nhật lúc ${when(j.fetchedAt)} · mất ${secs()}s` + (j.noReceipt ? ` · còn ${j.noReceipt} giao dịch chưa đọc được receipt (tạm tính theo giá hiện tại) — bấm Fetch lại để đọc tiếp` : '');
   } catch (e) { $('#status').className = 'sub err'; $('#status').textContent = 'Lỗi: ' + e.message + ' — thử bấm Fetch lại.'; }
   finally { $('#bar').style.width = '100%'; $('#fetchBtn').disabled = false; busy = false; }
@@ -311,7 +312,7 @@ $('#meEdit').onclick = e => { e.preventDefault(); $('#meInput').value = myWallet
 document.querySelectorAll('th[data-k]').forEach(th => th.onclick = () => {
   const k = th.dataset.k; sortDir = sortKey === k ? -sortDir : (['rank', 'orank', 'address', 'rewardRank'].includes(k) ? 1 : -1); sortKey = k; render();
 });
-try { const j = JSON.parse(store.get('bstocks-last')); if (j?.rows && j.rows[0]?.feeLost !== undefined) { data = j; $('#status').textContent = `Dữ liệu lần trước: ${when(j.fetchedAt)} — đang cập nhật…`; } } catch {}
+try { localStorage.removeItem('bstocks-last'); const j = JSON.parse(store.get('bstocks-last-v2')); if (j?.rows && j.rows[0]?.feeLost !== undefined) { data = j; $('#status').textContent = `Dữ liệu lần trước: ${when(j.fetchedAt)} — đang cập nhật…`; } } catch {}
 renderMe(); render();
 
 // ---------- ANTB activity & round-trip cost ----------
@@ -393,9 +394,10 @@ $('#feeSeg').onclick = e => { const b = e.target.closest('button'); if (!b) retu
 window.addEventListener('resize', drawFees);
 $('#fetchBtn').addEventListener('click', () => loadFees());
 
-// Leaderboard: fetched once on page load, then with the Fetch button. Fee card: auto-refreshes (above).
-loadFees();
-doFetch();
+// Leaderboard: fetched once on page load, then with the Fetch button.
+// On cold start (no cached data), run leaderboard first so loadFees() doesn't compete for PublicNode eth_getLogs quota.
+if (data) { loadFees(); doFetch(); }
+else { doFetch().finally(() => loadFees()); }
 </script>
 </body>
 </html>
