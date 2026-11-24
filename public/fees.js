@@ -6,9 +6,13 @@
 // the Trust Wallet route may add its own small fee on top.
 import { rpc, getLogsRange, pool, hex } from './engine.js';
 
-export const FEE_POOL = '0xe6422b4925842725b8aa953571dc03365928a641'; // ANTB/USDT, ~95% of ANTB volume
+export const FEE_POOL = '0x010fb01c2e714101d199524641fd8bab63966df6'; // current main ANTB/USDT pool
+export const FEE_POOLS = [
+  '0x010fb01c2e714101d199524641fd8bab63966df6', // new ANTB/USDT pool (migrated ~24/11)
+  '0xe6422b4925842725b8aa953571dc03365928a641', // previous ANTB/USDT pool
+];
 const SWAP_TOPIC = '0x9734819749a91fc3be03ea83205f924ee08479bd3f0da48efc91d94d050cac1e';
-const CACHE_KEY = 'bstocks-fees-v2';
+const CACHE_KEY = 'bstocks-fees-v3';
 const BLOCKS_PER_HOUR = 8000;   // ~0.45s blocks
 const FIRST_LOAD_HOURS = 6;
 const KEEP_HOURS = 24;
@@ -43,7 +47,7 @@ export async function fetchFees({ onProgress = () => {} } = {}) {
   let done = 0;
   onProgress(0, ranges.length);
   await pool(ranges, 3, async ([f, t]) => {
-    const logs = await getLogsRange(f, t, FEE_POOL, [SWAP_TOPIC]);
+    const logs = await getLogsRange(f, t, FEE_POOLS, [SWAP_TOPIC]);
     for (const l of logs) {
       const w = l.data.slice(2 + 64, 2 + 128);             // 2nd word packs int128 ANTB delta | int128 USDT delta (pool side)
       const antb = Number(i128(w.slice(0, 32))) / 1e18, usd = Number(i128(w.slice(32))) / 1e18;
