@@ -69,6 +69,24 @@
   .size-tbl table tr:last-child td { border-bottom:0 }
   .size-tbl tr.cheapest td { background:#0a9b3a14 }
   .badge-cheap { display:inline-block; font-size:11px; font-weight:600; padding:1px 7px; border-radius:99px; background:#0a9b3a28; color:var(--up); margin-left:6px }
+  .q-kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px; margin:12px 0 10px }
+  .q-kpi { border:1px solid var(--line); border-radius:11px; padding:10px 12px; background:var(--bg) }
+  .q-kpi b.lbl { display:flex; align-items:center; justify-content:space-between; font-size:12px; color:var(--muted); font-weight:500; margin-bottom:2px }
+  .q-kpi .val { font-size:21px; font-weight:800; font-variant-numeric:tabular-nums; line-height:1.2 }
+  .q-kpi .sub-line { font-size:12px; color:var(--muted); margin-top:3px; font-variant-numeric:tabular-nums }
+  .q-chart-wrap { position:relative; border:1px solid var(--line); border-radius:12px; padding:8px 6px 4px; background:var(--bg) }
+  #quoteChart { width:100%; height:268px; display:block; touch-action:pan-y; cursor:crosshair }
+  #quoteChart text { fill:var(--muted); font-size:11px; font-variant-numeric:tabular-nums }
+  .q-tip { position:absolute; top:10px; left:12px; pointer-events:none; background:var(--card); border:1px solid var(--line); border-radius:9px; padding:7px 10px; font-size:12px; line-height:1.45; box-shadow:0 4px 16px rgba(0,0,0,.22); font-variant-numeric:tabular-nums; z-index:4; max-width:270px }
+  .live-dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--up); margin-right:5px; vertical-align:0; box-shadow:0 0 0 3px #0a9b3a30 }
+  .q-note { margin-top:8px; font-size:12.5px; line-height:1.5; color:var(--muted) }
+  .q-note b { color:var(--text) }
+  .mkt-sub { margin-top:14px; padding-top:12px; border-top:1px solid var(--line) }
+  .mkt-hist { margin-top:12px; padding-top:10px; border-top:1px solid var(--line) }
+  .mkt-hist summary { cursor:pointer; font-weight:600; color:var(--text); display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center }
+  .mkt-hist summary::-webkit-details-marker { display:none }
+  .mkt-hist summary::before { content:'▸'; color:var(--muted); font-size:12px; transition:transform .15s }
+  .mkt-hist[open] summary::before { transform:rotate(90deg) }
   tr.mine td { background:var(--chip) }
   tr.mine td:first-child { box-shadow: inset 4px 0 0 var(--brand) }
 </style>
@@ -109,31 +127,85 @@
     </div>
   </div>
 
-  <div class="card" id="fees">
+  <div class="card" id="quotes">
     <div class="fee-head">
-      <div><b>Hoạt động & phí swap ANTB</b> <span class="sub">· toàn thị trường (mọi app)</span></div>
-      <div style="display:flex;gap:8px;align-items:center">
-        <div class="seg" id="feeSeg"><button data-s="5" class="on">5 phút</button><button data-s="15">15 phút</button><button data-s="60">1 giờ</button></div>
-        <button class="ghost" id="feeBtn">Làm mới</button>
+      <div>
+        <b>Đường giá & phí swap trực tiếp</b>
+        <span class="sub" id="qLiveBadge"><i class="live-dot"></i>tự cập nhật ~1.5s</span>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+        <div class="seg" id="qTokSeg">
+          <button data-sym="ANTB" class="on">ANTB 1.5×</button>
+          <button data-sym="NVDAB">NVDAB 1.5×</button>
+        </div>
+        <div class="seg" id="qWinSeg">
+          <button data-m="5" class="on">5 phút</button>
+          <button data-m="15">15 phút</button>
+        </div>
       </div>
     </div>
-    <div class="pills" id="feePills"><span class="pill">Đang tải…</span></div>
-    <svg id="feeChart" role="img" aria-label="Số lệnh và phí khứ hồi ANTB theo thời gian"></svg>
-    <div class="legend"><span><i style="background:var(--brand);opacity:.6"></i>Số lệnh swap</span><span><i style="background:var(--line-fee)"></i>Phí khứ hồi (%/vòng) — đường vàng càng thấp, swap càng rẻ</span></div>
-    <div class="size-tbl" id="feeSizeWrap" hidden>
-      <table>
-        <thead><tr>
-          <th>Mỗi lệnh</th>
-          <th>Spread 1 vòng<span class="need">trung bình qua Trust · điển hình, dự kiến 5–10 phút tới</span></th>
-          <th>Gas<span class="need">2 lệnh</span></th>
-          <th>Tổng / vòng<span class="need">trung bình</span></th>
-          <th>Cho 1,000 điểm<span class="need">trung bình</span></th>
-          <th>Mẫu<span class="need">mọi app · Trust</span></th>
-        </tr></thead>
-        <tbody id="feeSizeRows"></tbody>
-      </table>
+    <div class="q-kpis">
+      <div class="q-kpi">
+        <b class="lbl"><span>Giá MUA ngay (ask)</span><span class="up">MUA ↑</span></b>
+        <div class="val up" id="qAsk">—</div>
+        <div class="sub-line" id="qLastBuy">lệnh mua khớp gần nhất: đang tải…</div>
+      </div>
+      <div class="q-kpi">
+        <b class="lbl"><span>Giá BÁN ngay (bid)</span><span class="down">BÁN ↓</span></b>
+        <div class="val down" id="qBid">—</div>
+        <div class="sub-line" id="qLastSell">lệnh bán khớp gần nhất: đang tải…</div>
+      </div>
+      <div class="q-kpi">
+        <b class="lbl"><span>Spread tức thời (mua → bán ngay)</span><span id="qSpreadTag"></span></b>
+        <div class="val" id="qSpread">—</div>
+        <div class="sub-line" id="qSpreadSub">(chưa gồm trượt giá của lệnh lớn & gas)</div>
+      </div>
     </div>
-    <div class="sub" id="feeStatus" style="margin-top:6px"></div>
+    <div class="q-chart-wrap">
+      <svg id="quoteChart" role="img" aria-label="Đường giá mua (ask) và giá bán (bid) theo thời gian thực"></svg>
+      <div class="q-tip" id="quoteTip" hidden></div>
+    </div>
+    <div class="q-note" id="qCaption">
+      <b>Đường giá</b> (ANTB, NVDAB) = giá pool trên chuỗi đang báo mỗi giây, không cần ai swap: <b class="up">xanh</b> = giá bạn MUA được ngay lúc đó (ask), <b class="down">đỏ</b> = giá bạn BÁN được (bid); khoảng giữa hai đường là spread. Đã đối chiếu: lệnh ~$1,000 khớp sát giá pool báo; lệnh lớn hơn có thể trượt thêm. <b>Chấm mờ</b> = lệnh swap thật đã khớp (mọi app qua router, kể cả Trust Wallet). Spread là phần bạn mất nếu mua rồi bán ngay; giữ lâu hơn thì giá còn chạy lên/xuống thêm. Rê chuột / chạm vào chart để xem giá từng lúc.
+    </div>
+
+    <div class="mkt-sub" id="feeSizeSection" hidden>
+      <div style="display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;justify-content:space-between;margin-bottom:8px">
+        <div><b style="font-size:13.5px">Chi phí ước tính theo cỡ lệnh</b> <span class="sub">· gộp spread thực qua Trust + gas 2 chiều</span></div>
+      </div>
+      <div class="size-tbl" id="feeSizeWrap" style="margin-top:0">
+        <table>
+          <thead><tr>
+            <th>Mỗi lệnh</th>
+            <th>Spread 1 vòng<span class="need">trung bình qua Trust · điển hình, dự kiến 5–10 phút tới</span></th>
+            <th>Gas<span class="need">2 lệnh</span></th>
+            <th>Tổng / vòng<span class="need">trung bình</span></th>
+            <th>Cho 1,000 điểm<span class="need">trung bình</span></th>
+            <th>Mẫu<span class="need">mọi app · Trust</span></th>
+          </tr></thead>
+          <tbody id="feeSizeRows"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <details class="mkt-hist" id="feeHistDetails">
+      <summary>
+        <span>Lịch sử hoạt động & phí ANTB (6–24 giờ qua)</span>
+        <span class="sub" id="feeHistSummary" style="font-weight:400">· đang tải…</span>
+      </summary>
+      <div style="margin-top:10px">
+        <div class="fee-head">
+          <div class="pills" id="feePills" style="margin:0"><span class="pill">Đang tải…</span></div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <div class="seg" id="feeSeg"><button data-s="5" class="on">5 phút</button><button data-s="15">15 phút</button><button data-s="60">1 giờ</button></div>
+            <button class="ghost" id="feeBtn">Làm mới</button>
+          </div>
+        </div>
+        <svg id="feeChart" role="img" aria-label="Số lệnh và phí khứ hồi ANTB theo thời gian" style="margin-top:8px"></svg>
+        <div class="legend"><span><i style="background:var(--brand);opacity:.6"></i>Số lệnh swap</span><span><i style="background:var(--line-fee)"></i>Phí khứ hồi (%/vòng) — đường vàng càng thấp, swap càng rẻ</span></div>
+        <div class="sub" id="feeStatus" style="margin-top:6px"></div>
+      </div>
+    </details>
   </div>
 
   <div class="card">
@@ -173,6 +245,7 @@
 <script type="module">
 import { refresh, TIERS, rewardFor } from './engine.js';
 import { fetchFees, bucketize, feeStatus, sizeBreakdown } from './fees.js';
+import { createQuoteFeed, QUOTE_POOLS } from './quotes.js';
 const $ = s => document.querySelector(s);
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -327,6 +400,7 @@ function drawFees() {
   const st = feeStatus(feeData.minutes);
   const label = { low: '🟢 Phí thấp — nên swap', normal: '⚪ Phí bình thường', high: '🔴 Phí cao — nên chờ', unknown: '⚪ Chưa đủ dữ liệu' }[st.level];
   const cost10k = st.rt != null ? 5000 * st.rt : null; // one round trip of $S = $2S volume and costs $S × rt, so $10k volume costs $5,000 × rt
+  $('#feeHistSummary').textContent = `· 5 phút qua: ${st.n5} lệnh (thường ${st.normN ?? '—'}) · phí trung vị ${pct(st.normRt)}/vòng`;
   $('#feePills').innerHTML = [
     `<span class="pill ${st.level}">${label}</span>`,
     `<span class="pill">5 phút qua: ${st.n5} lệnh (thường ${st.normN ?? '—'})</span>`,
@@ -334,7 +408,18 @@ function drawFees() {
     cost10k != null ? `<span class="pill">cày $10,000 volume ≈ $${cost10k.toFixed(2)} phí → 15,000 điểm</span>` : '',
   ].join('');
 
-  const svg = $('#feeChart'), W = svg.clientWidth || 800, H = 240, L = 34, R = 50, T = 10, B = 24;
+  const sRows = sizeBreakdown(feeData.bySize, data?.trustBrackets, st);
+  $('#feeSizeSection').hidden = false;
+  $('#feeSizeRows').innerHTML = sRows.map(r => `<tr class="${r.cheapest ? 'cheapest' : ''}">
+    <td>${r.label}${r.cheapest ? '<span class="badge-cheap">rẻ nhất</span>' : ''}</td>
+    <td><b>${pct(r.spreadAvg)}</b><span class="need">điển hình ${pct(r.spreadTypical)}</span></td>
+    <td class="muted">${pct(r.gasPct)}</td>
+    <td><b>${pct(r.totalPct)}</b></td>
+    <td>$${r.costPer1k.toFixed(3)}</td>
+    <td class="muted">${fmt(r.marketCount)} · ${fmt(r.trustCount)}</td>
+  </tr>`).join('');
+
+  const svg = $('#feeChart'), W = svg.clientWidth || $('#quoteChart').clientWidth || 800, H = 240, L = 34, R = 50, T = 10, B = 24;
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   if (!buckets.length) { svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" text-anchor="middle">Chưa có dữ liệu</text>`; return; }
   const cw = (W - L - R) / buckets.length, maxN = Math.max(...buckets.map(b => b.n)) || 1;
@@ -352,26 +437,14 @@ function drawFees() {
   const every = Math.ceil(buckets.length / Math.max(2, Math.floor((W - L - R) / 70)));
   buckets.forEach((b, i) => { if (i % every === 0) s += `<text x="${L + i * cw + cw / 2}" y="${H - 6}" text-anchor="middle">${new Date(b.ts * 1000).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</text>`; });
   svg.innerHTML = s;
-
-  const sRows = sizeBreakdown(feeData.bySize, data?.trustBrackets, st);
-  $('#feeSizeWrap').hidden = false;
-  $('#feeSizeRows').innerHTML = sRows.map(r => `<tr class="${r.cheapest ? 'cheapest' : ''}">
-    <td>${r.label}${r.cheapest ? '<span class="badge-cheap">rẻ nhất</span>' : ''}</td>
-    <td><b>${pct(r.spreadAvg)}</b><span class="need">điển hình ${pct(r.spreadTypical)}</span></td>
-    <td class="muted">${pct(r.gasPct)}</td>
-    <td><b>${pct(r.totalPct)}</b></td>
-    <td>$${r.costPer1k.toFixed(3)}</td>
-    <td class="muted">${fmt(r.marketCount)} · ${fmt(r.trustCount)}</td>
-  </tr>`).join('');
 }
 
-// The fee card refreshes itself every 10s while the tab is visible (one small eth_getLogs per refresh).
-// The next refresh is only scheduled after the previous one finished, so requests never pile up.
-const FEE_AUTO_MS = 10_000;
+// Refresh market-wide swap stats every 15s when history details is expanded, or every 45s when collapsed.
+const feeAutoMs = () => ($('#feeHistDetails')?.open ? 15_000 : 45_000);
 let feeTimer = null, feeLastOk = 0;
 function scheduleFees() {
   clearTimeout(feeTimer);
-  if (document.visibilityState === 'visible') feeTimer = setTimeout(() => loadFees({ auto: true }), FEE_AUTO_MS);
+  if (document.visibilityState === 'visible') feeTimer = setTimeout(() => loadFees({ auto: true }), feeAutoMs());
 }
 async function loadFees({ auto = false } = {}) {
   if (feeBusy) return; feeBusy = true; clearTimeout(feeTimer);
@@ -386,13 +459,247 @@ async function loadFees({ auto = false } = {}) {
   finally { feeBusy = false; $('#feeBtn').disabled = false; scheduleFees(); }
 }
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState !== 'visible') { clearTimeout(feeTimer); return; }
-  if (Date.now() - feeLastOk >= FEE_AUTO_MS) loadFees({ auto: true }); else scheduleFees();
+  if (document.visibilityState !== 'visible') { clearTimeout(feeTimer); clearTimeout(qTimer); return; }
+  if (Date.now() - feeLastOk >= feeAutoMs()) loadFees({ auto: true }); else scheduleFees();
+  scheduleQuoteTick(100);
 });
+$('#feeHistDetails').ontoggle = () => { if ($('#feeHistDetails').open) drawFees(); scheduleFees(); };
 $('#feeBtn').onclick = () => loadFees();
 $('#feeSeg').onclick = e => { const b = e.target.closest('button'); if (!b) return; feeSize = +b.dataset.s; $('#feeSeg').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); drawFees(); };
-window.addEventListener('resize', drawFees);
+window.addEventListener('resize', () => { drawFees(); drawQuoteChart(); });
 $('#fetchBtn').addEventListener('click', () => loadFees());
+
+// ---------- Real-time on-chain Bid / Ask step-line chart (ANTB & NVDAB) ----------
+const QUOTE_POLL_MS = 1500;
+let qSym = 'ANTB', qWinMin = 5, qFeed = null, qSnap = null, qTimer = null, qHoverX = null, qGen = 0;
+
+const p4 = n => n == null || !isFinite(n) ? '—' : n.toFixed(4);
+function agoTxt(tsSec) {
+  if (!tsSec) return '';
+  const d = Math.max(0, Math.round(Date.now() / 1000 - tsSec));
+  if (d < 90) return `${d} giây trước`;
+  if (d < 5400) return `${Math.round(d / 60)} phút trước`;
+  return `${(d / 3600).toFixed(1)} giờ trước`;
+}
+
+function renderQuoteKpis() {
+  if (!qSnap) return;
+  const cur = qSnap.current;
+  const lb = qSnap.lastBuy, ls = qSnap.lastSell;
+  $('#qAsk').textContent = cur ? '$' + p4(cur.ask) : '—';
+  $('#qBid').textContent = cur ? '$' + p4(cur.bid) : '—';
+  $('#qLastBuy').textContent = lb ? `lệnh mua khớp gần nhất ${p4(lb.price)} (${agoTxt(lb.ts)})` : 'chưa có lệnh mua gần đây';
+  $('#qLastSell').textContent = ls ? `lệnh bán khớp gần nhất ${p4(ls.price)} (${agoTxt(ls.ts)})` : 'chưa có lệnh bán gần đây';
+
+  if (cur && cur.bid > 0) {
+    const sp = (cur.ask - cur.bid) / cur.bid;
+    const per1kUsd = 1000 * sp;
+    const per1kPts = (1000 / 3) * sp; // 1.5x boosted tokens: $1,000 round-trip ($2,000 vol) = 3,000 pts
+    $('#qSpread').textContent = `${(sp * 100).toFixed(3)}%`;
+    const tag = sp <= 0.0008 ? ['low', '🟢 Hẹp'] : sp >= 0.0022 ? ['high', '🔴 Rộng'] : ['normal', '⚪ Vừa'];
+    $('#qSpreadTag').innerHTML = `<span class="chip" style="margin:0;${tag[0] === 'low' ? 'background:#0a9b3a22;color:var(--up)' : tag[0] === 'high' ? 'background:#d3333322;color:var(--down)' : ''}">${tag[1]}</span>`;
+    $('#qSpreadSub').textContent = `≈ $${per1kUsd.toFixed(2)} / vòng $1,000 ($${per1kPts.toFixed(2)}/1k điểm) · chưa gồm trượt giá lệnh lớn`;
+  } else {
+    $('#qSpread').textContent = '—';
+    $('#qSpreadTag').textContent = '';
+    $('#qSpreadSub').textContent = '(chưa gồm trượt giá của lệnh lớn)';
+  }
+  $('#qLiveBadge').innerHTML = `<i class="live-dot"></i>pool báo trực tiếp mỗi giây · ${qSym}/USDT`;
+}
+
+function drawQuoteChart() {
+  const svg = $('#quoteChart'), tip = $('#quoteTip');
+  const W = svg.clientWidth || 860, H = 268, L = 12, R = 68, T = 12, B = 24;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  if (!qSnap || !qSnap.points.length) {
+    svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" text-anchor="middle">${qFeed ? 'Đang tải đường giá on-chain…' : 'Chưa có dữ liệu'}</text>`;
+    tip.hidden = true;
+    return;
+  }
+
+  const nowSec = Date.now() / 1000;
+  const tMin = nowSec - qWinMin * 60, tMax = nowSec;
+  // Include last point before tMin so step-line starts cleanly at the left edge
+  const allPts = qSnap.points;
+  let startIdx = 0;
+  for (let i = 0; i < allPts.length; i++) { if (allPts[i].ts <= tMin) startIdx = i; else break; }
+  const pts = allPts.slice(startIdx).map((p, idx) => idx === 0 && p.ts < tMin ? { ...p, ts: tMin } : p);
+  if (pts.length && pts[pts.length - 1].ts < tMax) pts.push({ ...pts[pts.length - 1], ts: tMax });
+
+  const swapsInWin = qSnap.swaps.filter(s => s.ts >= tMin && s.ts <= tMax);
+
+  // Compute tight Y domain from Bid/Ask step-lines + clip extreme outlier swap dots smoothly
+  let lo = Infinity, hi = -Infinity;
+  for (const p of pts) { if (p.bid < lo) lo = p.bid; if (p.ask > hi) hi = p.ask; }
+  const baseSpan = Math.max(hi - lo, (lo || 1) * 0.0012);
+  for (const s of swapsInWin) {
+    if (s.price >= lo - baseSpan * 1.5 && s.price <= hi + baseSpan * 1.5) {
+      if (s.price < lo) lo = s.price;
+      if (s.price > hi) hi = s.price;
+    }
+  }
+  const padY = Math.max((hi - lo) * 0.16, (lo || 1) * 0.0004);
+  const yMin = lo - padY, yMax = hi + padY;
+
+  const plotW = W - L - R, plotH = H - T - B;
+  const xOf = ts => L + Math.max(0, Math.min(1, (ts - tMin) / (tMax - tMin))) * plotW;
+  const yOf = v => T + (1 - (v - yMin) / Math.max(1e-9, yMax - yMin)) * plotH;
+
+  // Build SVG step-after path
+  const stepPath = key => {
+    let d = `M${xOf(pts[0].ts).toFixed(1)},${yOf(pts[0][key]).toFixed(1)}`;
+    for (let i = 1; i < pts.length; i++) {
+      const x = xOf(pts[i].ts).toFixed(1), y = yOf(pts[i][key]).toFixed(1);
+      d += `H${x}V${y}`;
+    }
+    return d;
+  };
+
+  let out = '';
+  // Horizontal grid + 5 right Y-axis labels
+  for (let i = 0; i <= 4; i++) {
+    const f = i / 4, v = yMin + (yMax - yMin) * f, y = yOf(v);
+    out += `<line x1="${L}" x2="${W - R}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="var(--line)" stroke-opacity="0.7"/>`;
+    out += `<text x="${W - R + 6}" y="${(y + 3.5).toFixed(1)}">${p4(v)}</text>`;
+  }
+
+  // X-axis minute ticks (HH:MM)
+  const stepSec = qWinMin <= 5 ? 60 : 180;
+  const firstTick = Math.ceil(tMin / stepSec) * stepSec;
+  for (let ts = firstTick; ts <= tMax; ts += stepSec) {
+    const x = xOf(ts);
+    const lbl = new Date(ts * 1000).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+    out += `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${T}" y2="${H - B}" stroke="var(--line)" stroke-opacity="0.35"/>`;
+    out += `<text x="${x.toFixed(1)}" y="${H - 6}" text-anchor="middle">${lbl}</text>`;
+  }
+
+  // Current Ask / Bid dashed lines + shaded spread band on right 18% of chart
+  const cur = pts[pts.length - 1];
+  const yAskCur = yOf(cur.ask), yBidCur = yOf(cur.bid);
+  const bandX = L + plotW * 0.82;
+  out += `<rect x="${bandX.toFixed(1)}" y="${Math.min(yAskCur, yBidCur).toFixed(1)}" width="${(W - R - bandX).toFixed(1)}" height="${Math.max(1.5, Math.abs(yBidCur - yAskCur)).toFixed(1)}" fill="#e0a800" fill-opacity="0.20"/>`;
+  out += `<line x1="${L}" x2="${W - R}" y1="${yAskCur.toFixed(1)}" y2="${yAskCur.toFixed(1)}" stroke="#e0a800" stroke-opacity="0.4" stroke-dasharray="3,4"/>`;
+  out += `<line x1="${L}" x2="${W - R}" y1="${yBidCur.toFixed(1)}" y2="${yBidCur.toFixed(1)}" stroke="#e0a800" stroke-opacity="0.4" stroke-dasharray="3,4"/>`;
+
+  // Executed swap faint dots ("Chấm mờ")
+  for (const s of swapsInWin) {
+    if (s.price < yMin || s.price > yMax) continue;
+    const cx = xOf(s.ts), cy = yOf(s.price);
+    const r = Math.max(2.4, Math.min(5.2, Math.log10(Math.max(10, s.usd)) * 1.35));
+    const col = s.side === 'buy' ? 'var(--up)' : 'var(--down)';
+    out += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r.toFixed(1)}" fill="${col}" fill-opacity="0.42" stroke="${col}" stroke-opacity="0.7" stroke-width="0.8"/>`;
+  }
+
+  // Step-lines: Green (Ask / Mua) & Red (Bid / Bán)
+  out += `<path d="${stepPath('ask')}" fill="none" stroke="var(--up)" stroke-width="1.65" stroke-linejoin="miter"/>`;
+  out += `<path d="${stepPath('bid')}" fill="none" stroke="var(--down)" stroke-width="1.65" stroke-linejoin="miter"/>`;
+
+  // Right-side pinned price pills for current Ask & Bid (avoid vertical overlap)
+  let tagAskY = yAskCur, tagBidY = yBidCur;
+  if (tagBidY - tagAskY < 18) {
+    const mid = (tagAskY + tagBidY) / 2;
+    tagAskY = Math.max(T + 9, mid - 9.5);
+    tagBidY = Math.min(H - B - 9, mid + 9.5);
+  }
+  const pillW = R - 4;
+  out += `<rect x="${W - R + 2}" y="${(tagAskY - 8.5).toFixed(1)}" width="${pillW}" height="17" rx="3.5" fill="#16a34a"/>`;
+  out += `<text x="${W - R + 2 + pillW / 2}" y="${(tagAskY + 3.8).toFixed(1)}" text-anchor="middle" style="fill:#fff;font-weight:700;font-size:11px">${p4(cur.ask)}</text>`;
+  out += `<rect x="${W - R + 2}" y="${(tagBidY - 8.5).toFixed(1)}" width="${pillW}" height="17" rx="3.5" fill="#dc2626"/>`;
+  out += `<text x="${W - R + 2 + pillW / 2}" y="${(tagBidY + 3.8).toFixed(1)}" text-anchor="middle" style="fill:#fff;font-weight:700;font-size:11px">${p4(cur.bid)}</text>`;
+
+  // Interactive hover crosshair & tooltip
+  if (qHoverX != null && qHoverX >= L && qHoverX <= W - R) {
+    const hTs = tMin + ((qHoverX - L) / plotW) * (tMax - tMin);
+    let hp = pts[0];
+    for (const p of pts) { if (p.ts <= hTs) hp = p; else break; }
+    const hx = xOf(hTs), hyA = yOf(hp.ask), hyB = yOf(hp.bid);
+    out += `<line x1="${hx.toFixed(1)}" x2="${hx.toFixed(1)}" y1="${T}" y2="${H - B}" stroke="var(--muted)" stroke-dasharray="3,3" stroke-opacity="0.75"/>`;
+    out += `<circle cx="${hx.toFixed(1)}" cy="${hyA.toFixed(1)}" r="3.6" fill="var(--up)" stroke="var(--card)" stroke-width="1.3"/>`;
+    out += `<circle cx="${hx.toFixed(1)}" cy="${hyB.toFixed(1)}" r="3.6" fill="var(--down)" stroke="var(--card)" stroke-width="1.3"/>`;
+
+    // Check if cursor is near an executed swap dot (within 8px horizontally)
+    let nearSwap = null, bestDx = 9;
+    for (const s of swapsInWin) {
+      const dx = Math.abs(xOf(s.ts) - qHoverX);
+      if (dx < bestDx) { bestDx = dx; nearSwap = s; }
+    }
+    const spPct = hp.bid > 0 ? ((hp.ask - hp.bid) / hp.bid * 100).toFixed(3) + '%' : '—';
+    const tmStr = new Date(hTs * 1000).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    tip.innerHTML = `<div><b>${tmStr}</b> · spread <b>${spPct}</b></div>`
+      + `<div class="up">Mua (ask): <b>$${p4(hp.ask)}</b></div>`
+      + `<div class="down">Bán (bid): <b>$${p4(hp.bid)}</b></div>`
+      + (nearSwap ? `<div style="margin-top:4px;padding-top:4px;border-top:1px solid var(--line)">Chấm khớp: <b class="${nearSwap.side === 'buy' ? 'up' : 'down'}">${nearSwap.side === 'buy' ? 'Mua' : 'Bán'} $${Math.round(nearSwap.usd).toLocaleString('en-US')}</b> @ <b>$${p4(nearSwap.price)}</b></div>` : '');
+    tip.hidden = false;
+    tip.style.left = (qHoverX > W * 0.58 ? Math.max(10, qHoverX - (tip.offsetWidth || 200) - 14) : qHoverX + 14) + 'px';
+  } else {
+    tip.hidden = true;
+  }
+
+  svg.innerHTML = out;
+}
+
+function scheduleQuoteTick(ms = QUOTE_POLL_MS) {
+  clearTimeout(qTimer);
+  if (document.visibilityState === 'visible' && qFeed) {
+    qTimer = setTimeout(runQuoteTick, ms);
+  }
+}
+
+async function runQuoteTick() {
+  const gen = qGen;
+  if (!qFeed) return;
+  try {
+    const snap = await qFeed.tick();
+    if (gen !== qGen) return;
+    qSnap = snap;
+    renderQuoteKpis();
+    drawQuoteChart();
+  } catch {}
+  finally { if (gen === qGen) scheduleQuoteTick(); }
+}
+
+async function selectQuoteToken(sym) {
+  if (!QUOTE_POOLS[sym]) return;
+  qSym = sym;
+  const gen = ++qGen;
+  clearTimeout(qTimer);
+  qSnap = null;
+  qFeed = createQuoteFeed(sym);
+  $('#qTokSeg').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.sym === sym));
+  $('#qAsk').textContent = '…'; $('#qBid').textContent = '…'; $('#qSpread').textContent = '…';
+  drawQuoteChart();
+  try {
+    const snap = await qFeed.init();
+    if (gen !== qGen) return;
+    qSnap = snap;
+    renderQuoteKpis();
+    drawQuoteChart();
+  } catch (e) {
+    if (gen === qGen) $('#qLiveBadge').textContent = 'Lỗi tải đường giá: ' + e.message;
+  } finally {
+    if (gen === qGen) scheduleQuoteTick();
+  }
+}
+
+$('#qTokSeg').onclick = e => { const b = e.target.closest('button'); if (b) selectQuoteToken(b.dataset.sym); };
+$('#qWinSeg').onclick = e => {
+  const b = e.target.closest('button'); if (!b) return;
+  qWinMin = +b.dataset.m;
+  $('#qWinSeg').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+  drawQuoteChart();
+};
+(() => {
+  const svg = $('#quoteChart');
+  const setX = clientX => { const r = svg.getBoundingClientRect(); qHoverX = clientX - r.left; drawQuoteChart(); };
+  svg.addEventListener('mousemove', e => setX(e.clientX));
+  svg.addEventListener('mouseleave', () => { qHoverX = null; drawQuoteChart(); });
+  svg.addEventListener('touchstart', e => { if (e.touches[0]) setX(e.touches[0].clientX); }, { passive: true });
+  svg.addEventListener('touchmove', e => { if (e.touches[0]) setX(e.touches[0].clientX); }, { passive: true });
+  svg.addEventListener('touchend', () => { qHoverX = null; drawQuoteChart(); });
+})();
+
+// Start live Bid/Ask feed immediately (uses PublicNode eth_call + bsc-dataseed, zero contention with NodeReal eth_getLogs)
+selectQuoteToken('ANTB');
 
 // Leaderboard: fetched once on page load, then with the Fetch button.
 // On cold start (no cached data), run leaderboard first so loadFees() doesn't compete for PublicNode eth_getLogs quota.
